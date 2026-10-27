@@ -212,6 +212,9 @@ func (d *Deej) stop() error {
 	}
 
 	d.stopTray()
+	if closer, ok := d.notifier.(interface{ Close() }); ok {
+		closer.Close()
+	}
 
 	// attempt to sync on exit - this won't necessarily work but can't harm
 	d.logger.Sync()

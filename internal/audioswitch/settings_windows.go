@@ -3,7 +3,6 @@ package audioswitch
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -16,7 +15,8 @@ import (
 )
 
 var (
-	pageColor = walk.RGB(28, 28, 30)
+	pageColor     = walk.RGB(28, 28, 30)
+	showScrollBar = syscall.NewLazyDLL("user32.dll").NewProc("ShowScrollBar")
 )
 
 // Settings runs in a child process: Walk and systray each own their UI thread.
@@ -30,15 +30,6 @@ func RunSettings() error {
 		}
 	}
 	defer ole.CoUninitialize()
-	userConfig, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	preferencesPath := filepath.Join(userConfig, "AudioDeejSwitch", "preferences.json")
-	preferences, err := loadSettingsPreferences(preferencesPath)
-	if err != nil {
-		return err
-	}
 	cfg, err := LoadConfig()
 	if err != nil {
 		return fmt.Errorf("%s: %w", ConfigPath, err)
@@ -57,6 +48,7 @@ func RunSettings() error {
 	var hotkey *walk.LineEdit
 	var editor *walk.TextEdit
 	var status *walk.Label
+	var savedNote *walk.Label
 	var devices []Device
 	capturedHotkey := ""
 	var appIcon *walk.Icon
@@ -85,6 +77,7 @@ func RunSettings() error {
 			labels = append(labels, b.Hotkey+" → "+b.Name)
 		}
 		shortcuts.SetModel(labels)
+		updateShortcutScrollbar(shortcuts)
 	}
 	refreshDevices := func() {
 		var err error
@@ -117,12 +110,11 @@ func RunSettings() error {
 		}
 		return Binding{DeviceID: devices[i-1].ID, Name: devices[i-1].Name}, true
 	}
-	dirtyRules := false
-	saveRules := func() {
+	persistRules := func() bool {
 		cfg.Communications = false
 		if err := cfg.Validate(); err != nil {
 			showError(err)
-			return
+			return false
 		}
 		data, err := yaml.Marshal(cfg)
 		if err == nil {
@@ -130,26 +122,13 @@ func RunSettings() error {
 		}
 		if err != nil {
 			showError(err)
-			return
+			return false
 		}
 		switchOriginal = data
-		dirtyRules = false
-		if !preferences.HideHotkeysSaved {
-			hide, err := showHotkeysSaved(mw)
-			if err != nil {
-				showError(err)
-				return
-			}
-			if hide {
-				candidate := preferences
-				candidate.HideHotkeysSaved = true
-				if err := saveSettingsPreferences(preferencesPath, candidate); err != nil {
-					showError(err)
-					return
-				}
-				preferences = candidate
-			}
+		if savedNote != nil {
+			savedNote.SetText("Atajos guardados.")
 		}
+		return true
 	}
 	err = (MainWindow{
 		AssignTo: &mw,
@@ -199,7 +178,11 @@ func RunSettings() error {
 										StretchFactor: 1,
 										Layout:        VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14}, Spacing: 10},
 										Children: []Widget{
-											Label{Text: "Atajos globales (Esc para cancelar)", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+											Composite{Layout: HBox{MarginsZero: true, Spacing: 4}, Children: []Widget{
+												Label{Text: "Atajos globales", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+												Label{Text: "(ESC para cancelar)", Font: Font{Family: "Segoe UI", PointSize: 9}},
+												HSpacer{},
+											}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 												LineEdit{AssignTo: &hotkey, ReadOnly: true, CueBanner: "Sin atajo", StretchFactor: 1},
 												PushButton{Text: "Capturar", OnClicked: func() {
@@ -220,14 +203,13 @@ func RunSettings() error {
 														return
 													}
 													b.Hotkey = capturedHotkey
-													candidate := cfg
-													candidate.Bindings = append(append([]Binding{}, cfg.Bindings...), b)
-													if err := candidate.Validate(); err != nil {
-														showError(err)
+													previous := cfg
+													cfg.Bindings = append(append([]Binding{}, cfg.Bindings...), b)
+													if !persistRules() {
+														cfg = previous
+														refreshRules()
 														return
 													}
-													cfg = candidate
-													dirtyRules = true
 													refreshRules()
 													capturedHotkey = ""
 													capture.stop()
@@ -242,14 +224,19 @@ func RunSettings() error {
 													if i < 0 {
 														return
 													}
-													cfg.Bindings = append(cfg.Bindings[:i], cfg.Bindings[i+1:]...)
-													dirtyRules = true
+													previous := cfg
+													cfg.Bindings = append(append([]Binding{}, cfg.Bindings[:i]...), cfg.Bindings[i+1:]...)
+													if !persistRules() {
+														cfg = previous
+														refreshRules()
+														return
+													}
 													refreshRules()
+													shortcuts.SetCurrentIndex(-1)
 												}},
 												HSpacer{},
-												PushButton{Text: "Guardar atajos", OnClicked: saveRules},
+												Label{AssignTo: &savedNote, Text: "", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
 											}},
-											Label{Text: "Los atajos funcionan con esta ventana cerrada. Cerrar esta venta no cierra el programa.", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: walk.RGB(90, 90, 90)},
 										},
 									},
 								},
@@ -324,12 +311,13 @@ func RunSettings() error {
 			hotkey.SetText(capturedHotkey)
 		}
 	})
+	configureShortcutList(shortcuts)
+	mw.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
 	refreshDevices()
 	refreshRules()
-	dirtyRules = false
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		text := strings.ReplaceAll(editor.Text(), "\r\n", "\n")
-		if dirtyRules || text != strings.ReplaceAll(string(original), "\r\n", "\n") {
+		if text != strings.ReplaceAll(string(original), "\r\n", "\n") {
 			*canceled = walk.MsgBox(mw, "Cambios sin guardar", "¿Cerrar y descartar los cambios sin guardar?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) != walk.DlgCmdYes
 		}
 	})
@@ -432,4 +420,33 @@ func currentModifiers() uint32 {
 
 func keyDown(vk int32) bool {
 	return uint16(win.GetKeyState(vk))&0x8000 != 0
+}
+
+func configureShortcutList(lb *walk.ListBox) {
+	hwnd := lb.Handle()
+	style := win.GetWindowLong(hwnd, win.GWL_STYLE)
+	win.SetWindowLong(hwnd, win.GWL_STYLE, style&^int32(win.WS_HSCROLL))
+	win.SetWindowPos(hwnd, 0, 0, 0, 0, 0, win.SWP_FRAMECHANGED|win.SWP_NOMOVE|win.SWP_NOSIZE|win.SWP_NOZORDER)
+}
+
+func updateShortcutScrollbar(lb *walk.ListBox) {
+	if lb == nil {
+		return
+	}
+	hwnd := lb.Handle()
+	count := int(win.SendMessage(hwnd, win.LB_GETCOUNT, 0, 0))
+	var client win.RECT
+	if !win.GetClientRect(hwnd, &client) {
+		return
+	}
+	needed := false
+	if count > 0 {
+		itemHeight := int(win.SendMessage(hwnd, win.LB_GETITEMHEIGHT, 0, 0))
+		needed = itemHeight > 0 && count*itemHeight > int(client.Bottom-client.Top)
+	}
+	var show uintptr
+	if needed {
+		show = 1
+	}
+	showScrollBar.Call(uintptr(hwnd), uintptr(win.SB_VERT), show)
 }

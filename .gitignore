@@ -15,3 +15,5 @@ preferences.yaml
 *.syso
 !pkg/deej/cmd/rsrc_windows_386.syso
 *.bak
+/V2/
+switcher.yaml
