@@ -37,6 +37,7 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
 - Configuración de atajos en `switcher.yaml`, recargada en aproximadamente un
   segundo sin reiniciar deej. Un YAML de atajos inválido conserva la configuración
   activa anterior. Los atajos ocupados o reservados se notifican y no se registran.
+  Tienes una plantilla sin datos personales en `switcher.example.yaml`.
 
 Se admiten combinaciones de Ctrl, Alt, Shift o Win con cualquier tecla física del
 teclado: letras, números, F1-F24, teclas OEM como `Oem5`, flechas, teclado numérico,
