@@ -108,6 +108,14 @@ Lee [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). Este proyecto es un fork
 independiente: los cambios y las propuestas se gestionan en este repositorio,
 no en el de deej original.
 
+### Desarrollo asistido por IA
+
+Parte del código y de la documentación se desarrolló con ayuda de herramientas de
+IA. El código generado se revisa, compila y prueba antes de publicarse; las
+decisiones de diseño y la publicación siguen siendo responsabilidad del
+mantenedor. El historial del repositorio conserva las contribuciones originales
+de deej.
+
 ### Créditos
 
 Base: [omriharel/deej](https://github.com/omriharel/deej), con su documentación y
