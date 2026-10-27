@@ -2,6 +2,7 @@ package deej
 
 import (
 	"github.com/getlantern/systray"
+	"github.com/omriharel/deej/internal/audioswitch"
 
 	"github.com/omriharel/deej/pkg/deej/icon"
 	"github.com/omriharel/deej/pkg/deej/util"
@@ -13,15 +14,19 @@ func (d *Deej) initializeTray(onDone func()) {
 	onReady := func() {
 		logger.Debug("Tray instance ready")
 
-		systray.SetTemplateIcon(icon.DeejLogo, icon.DeejLogo)
-		systray.SetTitle("deej")
-		systray.SetTooltip("deej")
+		systray.SetIcon(icon.AppLogo)
+		systray.SetTitle("AudioDeejSwitch")
+		systray.SetTooltip("AudioDeejSwitch")
 
-		editConfig := systray.AddMenuItem("Edit configuration", "Open config file with notepad")
-		editConfig.SetIcon(icon.EditConfig)
+		settings := systray.AddMenuItem("Configuración", "Abrir AudioDeejSwitch")
+		settings.SetIcon(icon.SettingsRed)
+		if util.Linux() {
+			settings.Hide()
+		}
+		systray.AddSeparator()
 
 		refreshSessions := systray.AddMenuItem("Re-scan audio sessions", "Manually refresh audio sessions if something's stuck")
-		refreshSessions.SetIcon(icon.RefreshSessions)
+		refreshSessions.SetIcon(icon.RefreshSessionsRed)
 
 		if d.version != "" {
 			systray.AddSeparator()
@@ -36,25 +41,16 @@ func (d *Deej) initializeTray(onDone func()) {
 		go func() {
 			for {
 				select {
+				case <-settings.ClickedCh:
+					if err := audioswitch.OpenSettings(); err != nil {
+						logger.Warnw("Open settings", "error", err)
+					}
 
 				// quit
 				case <-quit.ClickedCh:
 					logger.Info("Quit menu item clicked, stopping")
 
 					d.signalStop()
-
-				// edit config
-				case <-editConfig.ClickedCh:
-					logger.Info("Edit config menu item clicked, opening config for editing")
-
-					editor := "notepad.exe"
-					if util.Linux() {
-						editor = "gedit"
-					}
-
-					if err := util.OpenExternal(logger, editor, userConfigFilepath); err != nil {
-						logger.Warnw("Failed to open config file for editing", "error", err)
-					}
 
 				// refresh sessions
 				case <-refreshSessions.ClickedCh:

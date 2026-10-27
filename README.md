@@ -1,4 +1,94 @@
-# deej
+# AudioDeejSwitch
+
+Versión para **Windows 10/11 de 64 bits** basada en deej: conserva el Arduino,
+el protocolo serie y `config.yaml`, y añade selección de salida y atajos globales.
+
+## Inicio rápido
+
+1. Cierra tu deej anterior para liberar el puerto COM.
+2. Copia **tu `config.yaml` actual** a esta carpeta, junto a `AudioDeejSwitch.exe`.
+   El archivo incluido es el ejemplo original; comprueba el puerto COM antes de usarlo.
+3. Ejecuta `AudioDeejSwitch.exe`. El mezclador queda en la bandeja del sistema.
+4. Clic derecho en su icono → **Configuración**.
+5. Selecciona una salida, pulsa **Capturar**, pulsa la combinación que quieras
+   (por ejemplo `Ctrl+Alt+F8`), pulsa **Añadir atajo** y después **Guardar atajos**.
+   También puedes asignar un atajo a **Siguiente salida disponible (alternar)**.
+
+Para abrir la configuración sin conectar con el Arduino, ejecuta **`Configurar.cmd`**
+o `AudioDeejSwitch.exe --settings`. Este modo permite preparar la configuración,
+pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
+
+### Qué incluye
+
+- Control de volúmenes original de deej: aplicaciones, grupos, master, mic,
+  sonidos del sistema, aplicación en primer plano y aplicaciones sin asignar.
+- Ventana nativa pequeña para seleccionar salida y configurar atajos globales.
+- Atajos directos a un dispositivo o para alternar entre todas las salidas activas,
+  ordenadas por nombre. No necesitan que la ventana tenga el foco ni siga abierta.
+- Cambio de salida predeterminada de consola y multimedia, sin avisos al cambiar
+  correctamente. No modifica la salida de comunicaciones ni la entrada de micrófono.
+- Configuración con apariencia oscura e icono de deej con degradado rojo a negro
+  en el ejecutable y la bandeja del sistema.
+- Editor de `config.yaml` integrado: conserva el texto y los comentarios,
+  valida antes de guardar y crea `config.yaml.bak` con la versión anterior.
+- Detección de ediciones externas: si el archivo cambió después de abrir la
+  ventana, se evita sobrescribirlo. En el editor de deej puedes recargarlo;
+  para recargar los atajos, cierra y vuelve a abrir la ventana.
+- Configuración de atajos en `switcher.yaml`, recargada en aproximadamente un
+  segundo sin reiniciar deej. Un YAML de atajos inválido conserva la configuración
+  activa anterior. Los atajos ocupados o reservados se notifican y no se registran.
+
+Se admiten combinaciones de Ctrl, Alt, Shift o Win con cualquier tecla física del
+teclado: letras, números, F1-F24, teclas OEM como `Oem5`, flechas, teclado numérico,
+multimedia, etc. La captura guarda la tecla física, no el carácter: por ejemplo,
+`Shift+Oem1` puede escribir `:` según la distribución del teclado. F12 está
+reservada por Windows. Los IDs de los dispositivos se guardan para distinguir
+salidas con nombres iguales. Si un dispositivo está desconectado, su atajo muestra
+un aviso; vuelve a funcionar cuando regresa con el mismo ID.
+
+Las aplicaciones configuradas para una salida concreta pueden mantenerla al
+cambiar la predeterminada de Windows. Algunas necesitan reiniciar la reproducción.
+Esta versión cambia la salida de Windows; no asigna rutas de audio por aplicación.
+
+### Archivos y arranque
+
+Mantén el ejecutable, `config.yaml` y `switcher.yaml` en una carpeta con permisos
+de escritura. Los archivos se buscan junto al ejecutable, incluido al arrancar
+desde un acceso directo. Puedes colocar un acceso directo al ejecutable en
+`shell:startup` para iniciarlo con Windows.
+
+### Compilación y comprobaciones
+
+Necesitas Go 1.22 o posterior. Desde esta carpeta, en PowerShell:
+
+```powershell
+.\build.ps1
+go test ./...
+go vet ./...
+```
+
+El script genera el recurso de Windows con el manifiesto necesario para la ventana
+y compila `AudioDeejSwitch.exe` sin consola. Descarga la herramienta de recursos
+`github.com/akavel/rsrc` en su versión fijada `v0.10.2`.
+
+Las pruebas nativas enumeran dispositivos, comprueban la disponibilidad de la
+interfaz de cambio de salida y verifican registro, recarga y liberación de atajos
+reales de Windows. **No cambian la salida ni envían comandos al Arduino.**
+Las pruebas de configuración comprueban validación, duplicados, respaldo y
+protección frente a ediciones externas. El cambio audible entre dispositivos y
+el funcionamiento de los potenciómetros requieren una comprobación con tu equipo.
+
+### Créditos
+
+Base: [omriharel/deej](https://github.com/omriharel/deej), licencia MIT conservada
+en `LICENSE`. La documentación original sigue debajo. Las funciones de selección
+y atajos están inspiradas en [Audio Switcher](https://github.com/xenolightning/AudioSwitcher_v1);
+esta implementación las añade en Go usando las APIs de Windows y no requiere
+instalar Audio Switcher ni incorpora su código C#.
+
+---
+
+# deej — documentación original
 
 deej is an **open-source hardware volume mixer** for Windows and Linux PCs. It lets you use real-life sliders (like a DJ!) to **seamlessly control the volumes of different apps** (such as your music player, the game you're playing and your voice chat session) without having to stop what you're doing.
 

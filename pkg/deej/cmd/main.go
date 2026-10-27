@@ -3,6 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/omriharel/deej/internal/audioswitch"
 
 	"github.com/omriharel/deej/pkg/deej"
 )
@@ -12,16 +16,31 @@ var (
 	versionTag string
 	buildType  string
 
-	verbose bool
+	verbose  bool
+	settings bool
 )
 
 func init() {
 	flag.BoolVar(&verbose, "verbose", false, "show verbose logs (useful for debugging serial)")
 	flag.BoolVar(&verbose, "v", false, "shorthand for --verbose")
+	flag.BoolVar(&settings, "settings", false, "open AudioDeejSwitch settings without connecting to Arduino")
 	flag.Parse()
 }
 
 func main() {
+	// Portable configs belong next to the executable, even when launched by a
+	// startup shortcut whose working directory is somewhere else.
+	if exe, err := os.Executable(); err == nil {
+		if err := os.Chdir(filepath.Dir(exe)); err != nil {
+			panic(err)
+		}
+	}
+	if settings {
+		if err := audioswitch.RunSettings(); err != nil {
+			showSettingsError(err)
+		}
+		return
+	}
 
 	// first we need a logger
 	logger, err := deej.NewLogger(buildType)

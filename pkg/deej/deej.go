@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/omriharel/deej/internal/audioswitch"
+
 	"go.uber.org/zap"
 
 	"github.com/omriharel/deej/pkg/deej/util"
@@ -29,6 +31,8 @@ type Deej struct {
 	stopChannel chan bool
 	version     string
 	verbose     bool
+	stopSwitch  func()
+	switchNext  func()
 }
 
 // NewDeej creates a Deej instance
@@ -99,6 +103,11 @@ func (d *Deej) Initialize() error {
 	}
 
 	// decide whether to run with/without tray
+	d.stopSwitch, d.switchNext = audioswitch.Start(func(title, message string) {
+		d.logger.Infow(title, "message", message)
+		d.notifier.Notify(title, message)
+	})
+
 	if _, noTraySet := os.LookupEnv(envNoTray); noTraySet {
 
 		d.logger.Debugw("Running without tray icon", "reason", "envvar set")
@@ -189,6 +198,9 @@ func (d *Deej) signalStop() {
 
 func (d *Deej) stop() error {
 	d.logger.Info("Stopping")
+	if d.stopSwitch != nil {
+		d.stopSwitch()
+	}
 
 	d.config.StopWatchingConfigFile()
 	d.serial.Stop()
