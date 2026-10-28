@@ -12,6 +12,30 @@ import (
 	"github.com/lxn/win"
 )
 
+const (
+	sFalse          = 1
+	rpcEChangedMode = 0x80010106
+)
+
+func initializeCOM() (func(), error) {
+	err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED)
+	if err == nil {
+		return ole.CoUninitialize, nil
+	}
+	if oleErr, ok := err.(*ole.OleError); ok {
+		switch uint32(oleErr.Code()) {
+		case sFalse:
+			// COM is already initialized on this thread; balance this successful call.
+			return ole.CoUninitialize, nil
+		case rpcEChangedMode:
+			// The thread already uses another apartment model. Reuse it, but do not
+			// uninitialize COM that this call did not initialize.
+			return func() {}, nil
+		}
+	}
+	return nil, err
+}
+
 // Start keeps COM and RegisterHotKey on their owning Windows thread. Configuration
 // is independent from deej's watcher: changing shortcuts never reconnects serial.
 func Start(notify func(string, string)) (stop func(), next func()) {
@@ -22,11 +46,12 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer close(finished)
-		if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		cleanup, err := initializeCOM()
+		if err != nil {
 			notify("AudioDeejSwitch", "No se pudo iniciar el cambio de salida: "+err.Error())
 			return
 		}
-		defer ole.CoUninitialize()
+		defer cleanup()
 		user32 := syscall.NewLazyDLL("user32.dll")
 		register := user32.NewProc("RegisterHotKey")
 		unregister := user32.NewProc("UnregisterHotKey")

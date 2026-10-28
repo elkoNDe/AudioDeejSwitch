@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+func TestInitializeCOMRepeated(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	cleanup, err := initializeCOM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	cleanupAgain, err := initializeCOM()
+	if err != nil {
+		t.Fatalf("second initializeCOM: %v", err)
+	}
+	cleanupAgain()
+}
+
 func TestGlobalHotkeyReloadAndCleanup(t *testing.T) {
 	// Work in an isolated directory and never send the hotkey: no output changes.
 	previous, err := os.Getwd()
