@@ -116,6 +116,7 @@ func applySettingsDarkMode(mw walk.Form) error {
 	}
 	install := func(hwnd win.HWND) {
 		class := className(hwnd)
+		ownerdrawCombo := class == "ComboBox" && win.GetWindowLong(hwnd, win.GWL_STYLE)&win.CBS_OWNERDRAWFIXED != 0
 		theme := darkTheme
 		if class == "ComboBox" || class == "SysTabControl32" {
 			// These controls otherwise ignore CTLCOLOR when visual styles draw text.
@@ -137,7 +138,7 @@ func applySettingsDarkMode(mw walk.Form) error {
 				win.SetBkColor(win.HDC(wp), win.COLORREF(surface.color))
 				return uintptr(surface.hbr)
 			case win.WM_PAINT, win.WM_PRINTCLIENT:
-				if class == "SysTabControl32" || class == "ComboBox" {
+				if class == "SysTabControl32" || (class == "ComboBox" && !ownerdrawCombo) {
 					var ps win.PAINTSTRUCT
 					dc := win.HDC(wp)
 					if msg == win.WM_PAINT {
