@@ -324,24 +324,6 @@ func RunSettings() error {
 													hotkey.SetText(b.Hotkey)
 													savedNote.SetText("Atajo modificado.")
 												}},
-												PushButton{Text: "Eliminar", OnClicked: func() {
-													i, ok := selectedShortcut()
-													if !ok {
-														return
-													}
-													previous := cfg
-													cfg.Bindings = append(append([]Binding{}, cfg.Bindings[:i]...), cfg.Bindings[i+1:]...)
-													if !persistRules() {
-														cfg = previous
-														refreshRules()
-														return
-													}
-													refreshRules()
-													shortcuts.SetCurrentIndex(-1)
-													capturedHotkey = ""
-													capture.stop()
-													hotkey.SetText("")
-												}},
 												HSpacer{},
 												Label{AssignTo: &savedNote, Text: "", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
 											}},

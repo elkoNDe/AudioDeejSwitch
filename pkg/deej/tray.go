@@ -46,10 +46,11 @@ func (d *Deej) initializeTray(onDone func()) {
 						logger.Warnw("Open settings", "error", err)
 					}
 
-				// quit
+					// quit
 				case <-quit.ClickedCh:
 					logger.Info("Quit menu item clicked, stopping")
 
+					audioswitch.CloseSettings()
 					d.signalStop()
 
 				// refresh sessions

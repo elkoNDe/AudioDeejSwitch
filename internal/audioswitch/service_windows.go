@@ -167,6 +167,9 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 	}
 }
 
+var settingsCmd *exec.Cmd
+var settingsMu sync.Mutex
+
 func OpenSettings() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -176,6 +179,25 @@ func OpenSettings() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go cmd.Wait()
+	settingsMu.Lock()
+	settingsCmd = cmd
+	settingsMu.Unlock()
+	go func() {
+		cmd.Wait()
+		settingsMu.Lock()
+		if settingsCmd == cmd {
+			settingsCmd = nil
+		}
+		settingsMu.Unlock()
+	}()
 	return nil
+}
+
+func CloseSettings() {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	if settingsCmd != nil && settingsCmd.Process != nil {
+		settingsCmd.Process.Kill()
+		settingsCmd = nil
+	}
 }
