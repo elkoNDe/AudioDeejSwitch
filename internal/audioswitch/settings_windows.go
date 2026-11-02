@@ -292,37 +292,24 @@ func RunSettings() error {
 											Label{Text: "Lista de atajos configurados:", Font: Font{Family: "Segoe UI", PointSize: 9}},
 											ListBox{AssignTo: &shortcuts, StretchFactor: 1},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												PushButton{Text: "Modificar", OnClicked: func() {
+												PushButton{Text: "Eliminar", OnClicked: func() {
 													i, ok := selectedShortcut()
 													if !ok {
-														showError(fmt.Errorf("selecciona un atajo de la lista"))
-														return
-													}
-													if capturedHotkey == "" {
-														showError(fmt.Errorf("captura el nuevo atajo primero"))
 														return
 													}
 													previous := cfg
-													b := cfg.Bindings[i]
-													b.Hotkey = capturedHotkey
-													if outputs.CurrentIndex() != loadedOutputIndex {
-														if chosen, ok := selected(); ok {
-															b.DeviceID = chosen.DeviceID
-															b.Name = chosen.Name
-														}
-													}
-													cfg.Bindings[i] = b
+													cfg.Bindings = append(append([]Binding{}, cfg.Bindings[:i]...), cfg.Bindings[i+1:]...)
 													if !persistRules() {
 														cfg = previous
 														refreshRules()
 														return
 													}
 													refreshRules()
-													shortcuts.SetCurrentIndex(i)
+													shortcuts.SetCurrentIndex(-1)
 													capturedHotkey = ""
 													capture.stop()
-													hotkey.SetText(b.Hotkey)
-													savedNote.SetText("Atajo modificado.")
+													hotkey.SetText("")
+													savedNote.SetText("Atajo eliminado.")
 												}},
 												HSpacer{},
 												Label{AssignTo: &savedNote, Text: "", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
