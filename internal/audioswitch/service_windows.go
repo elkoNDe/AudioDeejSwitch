@@ -99,6 +99,41 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 			}
 		}
 		reload()
+		var startup *StartupOutput
+		var startupCommunications bool
+		var startupDeadline time.Time
+		var startupTicker *time.Ticker
+		var startupTick <-chan time.Time
+		finishStartup := func() {
+			startup = nil
+			if startupTicker != nil {
+				startupTicker.Stop()
+			}
+		}
+		applyStartup := func() {
+			if startup == nil {
+				return
+			}
+			if _, err := Switch(startup.DeviceID, startupCommunications); err != nil {
+				if time.Now().After(startupDeadline) {
+					notify("No se pudo aplicar la salida de inicio", err.Error())
+					finishStartup()
+				}
+				return
+			}
+			finishStartup()
+		}
+		if cfg.Startup != nil {
+			startup = cfg.Startup
+			startupCommunications = cfg.Communications
+			startupDeadline = time.Now().Add(30 * time.Second)
+			applyStartup()
+			if startup != nil {
+				startupTicker = time.NewTicker(2 * time.Second)
+				startupTick = startupTicker.C
+				defer startupTicker.Stop()
+			}
+		}
 		poll := time.NewTicker(25 * time.Millisecond)
 		defer poll.Stop()
 		refresh := time.NewTicker(time.Second)
@@ -109,6 +144,8 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 				return
 			case <-commands:
 				switchTo("cycle")
+			case <-startupTick:
+				applyStartup()
 			case <-refresh.C:
 				reload()
 			case <-poll.C:

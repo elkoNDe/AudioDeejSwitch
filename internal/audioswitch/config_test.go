@@ -110,3 +110,70 @@ func TestSavePreservesBackupAndRejectsExternalEdits(t *testing.T) {
 		t.Fatal("file changed after rejected save")
 	}
 }
+
+func TestStartupOutputValidation(t *testing.T) {
+	c := Config{Startup: &StartupOutput{DeviceID: "{device}", Name: "Salida"}}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c.Startup.DeviceID = "  "
+	if c.Validate() == nil {
+		t.Fatal("empty startup device accepted")
+	}
+	c.Startup.DeviceID = "cycle"
+	if c.Validate() == nil {
+		t.Fatal("cycle startup device accepted")
+	}
+	c.Startup.DeviceID = "CYCLE"
+	if c.Validate() == nil {
+		t.Fatal("uppercase cycle startup device accepted")
+	}
+	c.Startup = nil
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadConfigStartupOutput(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(previous)
+
+	old := []byte("communications: false\nbindings: []\n")
+	if err := os.WriteFile(ConfigPath, old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Startup != nil {
+		t.Fatal("startup output set without configuration")
+	}
+
+	valid := []byte("startup_output:\n  device_id: '{device}'\n  name: Salida\nbindings: []\n")
+	if err := os.WriteFile(ConfigPath, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Startup == nil || cfg.Startup.DeviceID != "{device}" || cfg.Startup.Name != "Salida" {
+		t.Fatalf("unexpected startup output: %+v", cfg.Startup)
+	}
+
+	invalid := []byte("startup_output:\n  name: Salida\nbindings: []\n")
+	if err := os.WriteFile(ConfigPath, invalid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("startup output without device accepted")
+	}
+}

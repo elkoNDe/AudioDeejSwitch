@@ -1,5 +1,13 @@
 # Copia este archivo como switcher.yaml y ajusta los atajos y dispositivos.
 communications: false
+
+# Salida que se aplica automáticamente al abrir AudioDeejSwitch (opcional).
+# También puedes elegirla desde la ventana, en "Salida al iniciar".
+# Descomenta y ajusta el ID y el nombre de tu dispositivo:
+# startup_output:
+#   device_id: '{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}'
+#   name: Nombre de tu dispositivo
+
 bindings:
   - hotkey: Ctrl+Oem5
     device_id: cycle

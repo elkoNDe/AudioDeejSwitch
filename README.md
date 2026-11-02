@@ -28,6 +28,10 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
   ordenadas por nombre. No necesitan que la ventana tenga el foco ni siga abierta.
 - Cambio de salida predeterminada de consola y multimedia, sin avisos al cambiar
   correctamente. No modifica la salida de comunicaciones ni la entrada de micrófono.
+- Salida automática al abrir la aplicación: elige una en **Salida al iniciar** y se
+  aplicará cada vez que arranque AudioDeejSwitch, incluido el inicio con Windows.
+  Si el dispositivo tarda en aparecer, reintenta durante unos 30 segundos y avisa
+  si sigue sin estar disponible.
 - Configuración con apariencia oscura e icono de deej con degradado rojo a negro
   en el ejecutable y la bandeja del sistema.
 - Editor de `config.yaml` integrado: conserva el texto y los comentarios,
@@ -59,6 +63,12 @@ Mantén el ejecutable, `config.yaml` y `switcher.yaml` en una carpeta con permis
 de escritura. Los archivos se buscan junto al ejecutable, incluido al arrancar
 desde un acceso directo. Puedes colocar un acceso directo al ejecutable en
 `shell:startup` para iniciarlo con Windows.
+
+La salida elegida en **Salida al iniciar** se guarda automáticamente en
+`switcher.yaml` como `startup_output` y se aplica cada vez que se abre la
+aplicación. Para que se seleccione al encender el equipo, mantén el acceso
+directo en `shell:startup`. No hace falta pulsar ningún atajo; el cambio es
+silencioso si la salida está disponible.
 
 ### Compilación y comprobaciones
 

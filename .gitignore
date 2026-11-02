@@ -6,6 +6,7 @@ venv/
 .vscode
 *.lnk
 *.exe
+*.exe~
 deej-dev
 deej-release
 releases/

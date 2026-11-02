@@ -18,9 +18,15 @@ type Binding struct {
 	Name     string `yaml:"name"`
 }
 
+type StartupOutput struct {
+	DeviceID string `yaml:"device_id"`
+	Name     string `yaml:"name"`
+}
+
 type Config struct {
-	Communications bool      `yaml:"communications"`
-	Bindings       []Binding `yaml:"bindings"`
+	Communications bool           `yaml:"communications"`
+	Startup        *StartupOutput `yaml:"startup_output,omitempty"`
+	Bindings       []Binding      `yaml:"bindings"`
 }
 
 func LoadConfig() (Config, error) {
@@ -39,6 +45,15 @@ func LoadConfig() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Startup != nil {
+		id := strings.TrimSpace(c.Startup.DeviceID)
+		if id == "" {
+			return fmt.Errorf("falta el dispositivo en startup_output")
+		}
+		if strings.EqualFold(id, "cycle") {
+			return fmt.Errorf("startup_output no admite 'cycle'; usa el ID de un dispositivo")
+		}
+	}
 	seen := map[string]bool{}
 	for _, b := range c.Bindings {
 		mods, key, err := ParseHotkey(b.Hotkey)

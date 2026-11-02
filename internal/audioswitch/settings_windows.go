@@ -44,12 +44,15 @@ func RunSettings() error {
 	}
 	var mw *walk.MainWindow
 	var outputs *walk.ComboBox
+	var startupOutputs *walk.ComboBox
 	var shortcuts *walk.ListBox
 	var hotkey *walk.LineEdit
 	var editor *walk.TextEdit
 	var status *walk.Label
 	var savedNote *walk.Label
 	var devices []Device
+	var startupChoices []*StartupOutput
+	startupRefreshing := false
 	capturedHotkey := ""
 	var appIcon *walk.Icon
 	if icon, err := walk.NewIconFromResourceId(2); err == nil {
@@ -79,6 +82,44 @@ func RunSettings() error {
 		shortcuts.SetModel(labels)
 		updateShortcutScrollbar(shortcuts)
 	}
+	refreshStartupCombo := func() {
+		if startupOutputs == nil {
+			return
+		}
+		labels := []string{"Ninguna"}
+		choices := []*StartupOutput{nil}
+		selected := 0
+		for _, d := range devices {
+			labels = append(labels, d.Name)
+			choices = append(choices, &StartupOutput{DeviceID: d.ID, Name: d.Name})
+			if cfg.Startup != nil && cfg.Startup.DeviceID == d.ID {
+				selected = len(labels) - 1
+			}
+		}
+		if cfg.Startup != nil {
+			found := false
+			for _, choice := range choices {
+				if choice != nil && choice.DeviceID == cfg.Startup.DeviceID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				name := strings.TrimSpace(cfg.Startup.Name)
+				if name == "" {
+					name = "Dispositivo configurado"
+				}
+				labels = append(labels, name+" [no conectado]")
+				choices = append(choices, cfg.Startup)
+				selected = len(labels) - 1
+			}
+		}
+		startupChoices = choices
+		startupRefreshing = true
+		startupOutputs.SetModel(labels)
+		startupOutputs.SetCurrentIndex(selected)
+		startupRefreshing = false
+	}
 	refreshDevices := func() {
 		var err error
 		devices, err = Devices()
@@ -99,6 +140,7 @@ func RunSettings() error {
 		outputs.SetModel(labels)
 		outputs.SetCurrentIndex(0)
 		status.SetText("Salida actual: " + current)
+		refreshStartupCombo()
 	}
 	selected := func() (Binding, bool) {
 		i := outputs.CurrentIndex()
@@ -171,6 +213,15 @@ func RunSettings() error {
 												PushButton{Text: "Actualizar dispositivos", OnClicked: refreshDevices},
 												HSpacer{},
 											}},
+										},
+									},
+									Composite{
+										Name:   "settings-card",
+										Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14}, Spacing: 10},
+										Children: []Widget{
+											Label{Text: "Salida al iniciar", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+											Label{Text: "Se aplica automáticamente al abrir AudioDeejSwitch, incluido el inicio con Windows.", Font: Font{Family: "Segoe UI", PointSize: 9}},
+											ComboBox{AssignTo: &startupOutputs},
 										},
 									},
 									Composite{
@@ -313,6 +364,31 @@ func RunSettings() error {
 	})
 	configureShortcutList(shortcuts)
 	mw.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
+	startupOutputs.CurrentIndexChanged().Attach(func() {
+		if startupRefreshing {
+			return
+		}
+		index := startupOutputs.CurrentIndex()
+		if index < 0 || index >= len(startupChoices) {
+			return
+		}
+		previous := cfg
+		if startupChoices[index] == nil {
+			cfg.Startup = nil
+		} else {
+			choice := *startupChoices[index]
+			cfg.Startup = &choice
+		}
+		if !persistRules() {
+			cfg = previous
+			refreshStartupCombo()
+			return
+		}
+		refreshStartupCombo()
+		if savedNote != nil {
+			savedNote.SetText("Salida de inicio guardada.")
+		}
+	})
 	refreshDevices()
 	refreshRules()
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
