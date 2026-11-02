@@ -16,8 +16,6 @@ import (
 
 var (
 	pageColor     = walk.RGB(28, 28, 30)
-	actualColor   = walk.RGB(80, 220, 130)
-	startupColor  = walk.RGB(255, 175, 70)
 	showScrollBar = syscall.NewLazyDLL("user32.dll").NewProc("ShowScrollBar")
 )
 
@@ -45,7 +43,7 @@ func RunSettings() error {
 		return err
 	}
 	var mw *walk.MainWindow
-	var outputs *outputCombo
+	var outputs *walk.ComboBox
 	var shortcuts *walk.ListBox
 	var hotkey *walk.LineEdit
 	var editor *walk.TextEdit
@@ -114,25 +112,23 @@ func RunSettings() error {
 			return
 		}
 		previousIndex := outputs.CurrentIndex()
-		entries := []outputEntry{{
-			Text: "Siguiente salida disponible (alternar)",
-			Name: "Siguiente salida disponible (alternar)",
-		}}
+		labels := []string{"Siguiente salida disponible (alternar)"}
 		for _, d := range devices {
-			entry := outputEntry{Name: d.Name, Text: d.Name}
+			label := d.Name
+			tags := []string{}
 			if d.Default {
-				entry.Tags = append(entry.Tags, outputTag{Text: "actual", Color: actualColor})
+				tags = append(tags, "actual")
 			}
 			if cfg.Startup != nil && cfg.Startup.DeviceID == d.ID {
-				entry.Tags = append(entry.Tags, outputTag{Text: "inicio", Color: startupColor})
+				tags = append(tags, "inicio")
 			}
-			for _, tag := range entry.Tags {
-				entry.Text += " [" + tag.Text + "]"
+			if len(tags) > 0 {
+				label += " [" + strings.Join(tags, ", ") + "]"
 			}
-			entries = append(entries, entry)
+			labels = append(labels, label)
 		}
-		outputs.SetItems(entries)
-		if previousIndex >= 0 && previousIndex < len(entries) {
+		outputs.SetModel(labels)
+		if previousIndex >= 0 && previousIndex < len(labels) {
 			outputs.SetCurrentIndex(previousIndex)
 		} else {
 			outputs.SetCurrentIndex(0)
@@ -205,7 +201,7 @@ func RunSettings() error {
 													OnClicked:   refreshDevices,
 												},
 											}},
-											outputComboDeclaration{AssignTo: &outputs, Font: Font{Family: "Segoe UI", PointSize: 9}},
+											ComboBox{AssignTo: &outputs, Font: Font{Family: "Segoe UI", PointSize: 9}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 												PushButton{Text: "Usar esta salida", OnClicked: func() {
 													b, ok := selected()
@@ -426,7 +422,7 @@ func RunSettings() error {
 	})
 	mw.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
 	shortcuts.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
-	outputs.CurrentIndexChanged().Attach(func(int) { updateStartupButton() })
+	outputs.CurrentIndexChanged().Attach(updateStartupButton)
 	refreshDevices()
 	refreshRules()
 	shortcuts.CurrentIndexChanged().Attach(func() {

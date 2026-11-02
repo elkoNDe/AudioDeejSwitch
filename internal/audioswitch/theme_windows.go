@@ -2,6 +2,7 @@ package audioswitch
 
 import (
 	"fmt"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -16,6 +17,8 @@ var (
 	darkInput    = walk.RGB(20, 20, 23)
 	darkAccent   = walk.RGB(238, 55, 73)
 	darkBorder   = walk.RGB(93, 93, 104)
+	actualColor  = walk.RGB(80, 220, 130)
+	startupColor = walk.RGB(255, 175, 70)
 	fillRectProc = syscall.NewLazyDLL("user32.dll").NewProc("FillRect")
 )
 
@@ -196,7 +199,6 @@ func paintDarkCombo(hwnd win.HWND, dc win.HDC, surfaces map[walk.Color]*darkSurf
 	previous := win.SelectObject(dc, win.HGDIOBJ(font))
 	defer win.SelectObject(dc, previous)
 	win.SetBkMode(dc, win.TRANSPARENT)
-	win.SetTextColor(dc, win.COLORREF(darkText))
 	arrowWidth := int32(24)
 	if dpi := win.GetDeviceCaps(dc, win.LOGPIXELSX); dpi > 0 {
 		arrowWidth = 24 * dpi / 96
@@ -213,9 +215,69 @@ func paintDarkCombo(hwnd win.HWND, dc win.HDC, surfaces map[walk.Color]*darkSurf
 	}
 	label := make([]uint16, int(length)+1)
 	win.SendMessage(hwnd, win.CB_GETLBTEXT, index, uintptr(unsafe.Pointer(&label[0])))
-	bounds.Left += 6
-	bounds.Right = arrow.Left - 4
-	win.DrawTextEx(dc, &label[0], length, &bounds, win.DT_LEFT|win.DT_VCENTER|win.DT_SINGLELINE|win.DT_END_ELLIPSIS|win.DT_NOPREFIX, nil)
+	labelStr := syscall.UTF16ToString(label)
+	textRect := bounds
+	textRect.Left += 6
+	textRect.Right = arrow.Left - 4
+	drawColoredTags(dc, &textRect, labelStr)
+}
+
+func drawColoredTags(dc win.HDC, rect *win.RECT, text string) {
+	segments := parseTags(text)
+	x := rect.Left
+	for _, seg := range segments {
+		ptr := syscall.StringToUTF16Ptr(seg.text)
+		measure := win.RECT{}
+		win.DrawTextEx(dc, ptr, -1, &measure, win.DT_CALCRECT|win.DT_SINGLELINE|win.DT_NOPREFIX, nil)
+		width := measure.Right - measure.Left
+		if x >= rect.Right {
+			break
+		}
+		draw := win.RECT{Left: x, Top: rect.Top, Right: rect.Right, Bottom: rect.Bottom}
+		win.SetTextColor(dc, win.COLORREF(seg.color))
+		win.DrawTextEx(dc, ptr, -1, &draw, win.DT_LEFT|win.DT_VCENTER|win.DT_SINGLELINE|win.DT_NOPREFIX, nil)
+		x += width
+	}
+}
+
+type tagSegment struct {
+	text  string
+	color walk.Color
+}
+
+func parseTags(text string) []tagSegment {
+	var segments []tagSegment
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '[' {
+			if i > start {
+				segments = append(segments, tagSegment{text: text[start:i], color: darkText})
+			}
+			j := strings.Index(text[i:], "]")
+			if j >= 0 {
+				tagContent := text[i+1 : i+j]
+				for _, tag := range strings.Split(tagContent, ", ") {
+					color := darkMuted
+					switch tag {
+					case "actual":
+						color = actualColor
+					case "inicio":
+						color = startupColor
+					}
+					segments = append(segments, tagSegment{text: " [" + tag + "]", color: color})
+				}
+				start = i + j + 1
+				i = start - 1
+			}
+		}
+	}
+	if start < len(text) {
+		segments = append(segments, tagSegment{text: text[start:], color: darkText})
+	}
+	if len(segments) == 0 {
+		segments = append(segments, tagSegment{text: text, color: darkText})
+	}
+	return segments
 }
 
 // Walk's tab painter uses system black text even on a custom dark background.
