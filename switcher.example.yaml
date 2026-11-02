@@ -2,7 +2,7 @@
 communications: false
 
 # Salida que se aplica automáticamente al abrir AudioDeejSwitch (opcional).
-# También puedes elegirla desde la ventana, en "Salida al iniciar".
+# También puedes elegirla desde la ventana con el botón "Al iniciar".
 # Descomenta y ajusta el ID y el nombre de tu dispositivo:
 # startup_output:
 #   device_id: '{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}'

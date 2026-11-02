@@ -12,7 +12,8 @@ el protocolo serie y `config.yaml`, y añade selección de salida y atajos globa
 4. Clic derecho en su icono → **Configuración**.
 5. Selecciona una salida, pulsa **Capturar**, pulsa la combinación que quieras
    (por ejemplo `Ctrl+Alt+F8`) y pulsa **Añadir atajo**. El atajo se guarda
-   automáticamente. También puedes asignar un atajo a
+   automáticamente. Para cambiar uno existente, selecciónalo en la lista, captura
+   la nueva combinación y pulsa **Modificar**. También puedes asignar un atajo a
    **Siguiente salida disponible (alternar)**.
 
 Para abrir la configuración sin conectar con el Arduino, ejecuta **`Configurar.cmd`**
@@ -28,10 +29,11 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
   ordenadas por nombre. No necesitan que la ventana tenga el foco ni siga abierta.
 - Cambio de salida predeterminada de consola y multimedia, sin avisos al cambiar
   correctamente. No modifica la salida de comunicaciones ni la entrada de micrófono.
-- Salida automática al abrir la aplicación: elige una en **Salida al iniciar** y se
-  aplicará cada vez que arranque AudioDeejSwitch, incluido el inicio con Windows.
-  Si el dispositivo tarda en aparecer, reintenta durante unos 30 segundos y avisa
-  si sigue sin estar disponible.
+- Salida automática al abrir la aplicación: selecciona una salida y pulsa
+  **Al iniciar**; se aplicará cada vez que arranque AudioDeejSwitch, incluido el
+  inicio con Windows. Si el dispositivo tarda en aparecer, reintenta durante unos
+  30 segundos y avisa si sigue sin estar disponible. **Quitar inicio** desactiva
+  esta selección.
 - Configuración con apariencia oscura e icono de deej con degradado rojo a negro
   en el ejecutable y la bandeja del sistema.
 - Editor de `config.yaml` integrado: conserva el texto y los comentarios,
@@ -40,10 +42,11 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
   ventana, se evita sobrescribirlo. En el editor de deej puedes recargarlo;
   para recargar los atajos, cierra y vuelve a abrir la ventana.
 - Configuración de atajos en `switcher.yaml`, recargada en aproximadamente un
-  segundo sin reiniciar deej. Los cambios se guardan automáticamente al añadir
-  o eliminar un atajo. Un YAML de atajos inválido conserva la configuración
-  activa anterior. Los atajos ocupados o reservados se notifican y no se registran.
-  Tienes una plantilla sin datos personales en `switcher.example.yaml`.
+  segundo sin reiniciar deej. Los cambios se guardan automáticamente al añadir,
+  modificar o eliminar un atajo. Un YAML de atajos inválido conserva la
+  configuración activa anterior. Los atajos ocupados o reservados se notifican y
+  no se registran. Tienes una plantilla sin datos personales en
+  `switcher.example.yaml`.
 
 Se admiten combinaciones de Ctrl, Alt, Shift o Win con cualquier tecla física del
 teclado: letras, números, F1-F24, teclas OEM como `Oem5`, flechas, teclado numérico,
@@ -64,11 +67,11 @@ de escritura. Los archivos se buscan junto al ejecutable, incluido al arrancar
 desde un acceso directo. Puedes colocar un acceso directo al ejecutable en
 `shell:startup` para iniciarlo con Windows.
 
-La salida elegida en **Salida al iniciar** se guarda automáticamente en
-`switcher.yaml` como `startup_output` y se aplica cada vez que se abre la
-aplicación. Para que se seleccione al encender el equipo, mantén el acceso
-directo en `shell:startup`. No hace falta pulsar ningún atajo; el cambio es
-silencioso si la salida está disponible.
+La salida elegida con **Al iniciar** se guarda en `switcher.yaml` como
+`startup_output` y se aplica cada vez que se abre la aplicación. Para que se
+seleccione al encender el equipo, mantén el acceso directo en `shell:startup`.
+No hace falta pulsar ningún atajo; el cambio es silencioso si la salida está
+disponible.
 
 ### Compilación y comprobaciones
 

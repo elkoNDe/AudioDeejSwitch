@@ -56,6 +56,7 @@ func applySettingsDarkMode(mw walk.Form) error {
 	}
 	mw.Disposing().Attach(dispose)
 	backgrounds := make(map[win.HWND]*darkSurface)
+	textColors := make(map[win.HWND]walk.Color)
 	var visit func(walk.Window, *darkSurface)
 	visit = func(w walk.Window, surface *darkSurface) {
 		if w.Name() == "settings-card" {
@@ -68,7 +69,14 @@ func applySettingsDarkMode(mw walk.Form) error {
 		backgrounds[w.Handle()] = surface
 		w.SetBackground(surface.brush)
 		if colored, ok := w.(interface{ SetTextColor(walk.Color) }); ok {
-			colored.SetTextColor(darkText)
+			color := darkText
+			if tc, ok := w.(interface{ TextColor() walk.Color }); ok {
+				if custom := tc.TextColor(); custom != 0 {
+					color = custom
+				}
+			}
+			colored.SetTextColor(color)
+			textColors[w.Handle()] = color
 		}
 		if tabs, ok := w.(*walk.TabWidget); ok {
 			for i := 0; i < tabs.Pages().Len(); i++ {
@@ -97,6 +105,15 @@ func applySettingsDarkMode(mw walk.Form) error {
 		}
 		return surfaces[pageColor]
 	}
+	colorFor := func(hwnd win.HWND) walk.Color {
+		for hwnd != 0 {
+			if c, ok := textColors[hwnd]; ok {
+				return c
+			}
+			hwnd = win.GetParent(hwnd)
+		}
+		return darkText
+	}
 	install := func(hwnd win.HWND) {
 		class := className(hwnd)
 		theme := darkTheme
@@ -110,10 +127,13 @@ func applySettingsDarkMode(mw walk.Form) error {
 			switch msg {
 			case win.WM_CTLCOLOREDIT, win.WM_CTLCOLORLISTBOX, win.WM_CTLCOLORSTATIC, win.WM_CTLCOLORBTN:
 				surface := surfaceFor(win.HWND(lp))
+				color := darkText
 				if msg == win.WM_CTLCOLOREDIT || msg == win.WM_CTLCOLORLISTBOX {
 					surface = surfaces[darkInput]
+				} else {
+					color = colorFor(win.HWND(lp))
 				}
-				win.SetTextColor(win.HDC(wp), win.COLORREF(darkText))
+				win.SetTextColor(win.HDC(wp), win.COLORREF(color))
 				win.SetBkColor(win.HDC(wp), win.COLORREF(surface.color))
 				return uintptr(surface.hbr)
 			case win.WM_PAINT, win.WM_PRINTCLIENT:

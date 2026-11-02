@@ -16,6 +16,8 @@ import (
 
 var (
 	pageColor     = walk.RGB(28, 28, 30)
+	actualColor   = walk.RGB(80, 220, 130)
+	startupColor  = walk.RGB(255, 175, 70)
 	showScrollBar = syscall.NewLazyDLL("user32.dll").NewProc("ShowScrollBar")
 )
 
@@ -44,15 +46,14 @@ func RunSettings() error {
 	}
 	var mw *walk.MainWindow
 	var outputs *walk.ComboBox
-	var startupOutputs *walk.ComboBox
 	var shortcuts *walk.ListBox
 	var hotkey *walk.LineEdit
 	var editor *walk.TextEdit
 	var status *walk.Label
+	var startupStatus *walk.Label
 	var savedNote *walk.Label
 	var devices []Device
-	var startupChoices []*StartupOutput
-	startupRefreshing := false
+	loadedOutputIndex := 0
 	capturedHotkey := ""
 	var appIcon *walk.Icon
 	if icon, err := walk.NewIconFromResourceId(2); err == nil {
@@ -82,44 +83,6 @@ func RunSettings() error {
 		shortcuts.SetModel(labels)
 		updateShortcutScrollbar(shortcuts)
 	}
-	refreshStartupCombo := func() {
-		if startupOutputs == nil {
-			return
-		}
-		labels := []string{"Ninguna"}
-		choices := []*StartupOutput{nil}
-		selected := 0
-		for _, d := range devices {
-			labels = append(labels, d.Name)
-			choices = append(choices, &StartupOutput{DeviceID: d.ID, Name: d.Name})
-			if cfg.Startup != nil && cfg.Startup.DeviceID == d.ID {
-				selected = len(labels) - 1
-			}
-		}
-		if cfg.Startup != nil {
-			found := false
-			for _, choice := range choices {
-				if choice != nil && choice.DeviceID == cfg.Startup.DeviceID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				name := strings.TrimSpace(cfg.Startup.Name)
-				if name == "" {
-					name = "Dispositivo configurado"
-				}
-				labels = append(labels, name+" [no conectado]")
-				choices = append(choices, cfg.Startup)
-				selected = len(labels) - 1
-			}
-		}
-		startupChoices = choices
-		startupRefreshing = true
-		startupOutputs.SetModel(labels)
-		startupOutputs.SetCurrentIndex(selected)
-		startupRefreshing = false
-	}
 	refreshDevices := func() {
 		var err error
 		devices, err = Devices()
@@ -127,20 +90,49 @@ func RunSettings() error {
 			showError(err)
 			return
 		}
+		previousIndex := outputs.CurrentIndex()
 		labels := []string{"Siguiente salida disponible (alternar)"}
 		current := "Sin salida predeterminada"
 		for _, d := range devices {
 			label := d.Name
+			tags := []string{}
 			if d.Default {
 				current = d.Name
-				label += " [actual]"
+				tags = append(tags, "actual")
+			}
+			if cfg.Startup != nil && cfg.Startup.DeviceID == d.ID {
+				tags = append(tags, "inicio")
+			}
+			if len(tags) > 0 {
+				label += " [" + strings.Join(tags, ", ") + "]"
 			}
 			labels = append(labels, label)
 		}
 		outputs.SetModel(labels)
-		outputs.SetCurrentIndex(0)
-		status.SetText("Salida actual: " + current)
-		refreshStartupCombo()
+		if previousIndex >= 0 && previousIndex < len(labels) {
+			outputs.SetCurrentIndex(previousIndex)
+		} else {
+			outputs.SetCurrentIndex(0)
+		}
+		status.SetText("● Salida actual: " + current)
+		startup := "Ninguna"
+		if cfg.Startup != nil {
+			startup = strings.TrimSpace(cfg.Startup.Name)
+			if startup == "" {
+				startup = "Dispositivo configurado"
+			}
+			connected := false
+			for _, d := range devices {
+				if d.ID == cfg.Startup.DeviceID {
+					connected = true
+					break
+				}
+			}
+			if !connected {
+				startup += " [no conectado]"
+			}
+		}
+		startupStatus.SetText("● Al iniciar: " + startup)
 	}
 	selected := func() (Binding, bool) {
 		i := outputs.CurrentIndex()
@@ -151,6 +143,18 @@ func RunSettings() error {
 			return Binding{DeviceID: "cycle", Name: "Siguiente salida"}, true
 		}
 		return Binding{DeviceID: devices[i-1].ID, Name: devices[i-1].Name}, true
+	}
+	selectedShortcut := func() (int, bool) {
+		i := shortcuts.CurrentIndex()
+		return i, i >= 0 && i < len(cfg.Bindings)
+	}
+	outputIndexForDevice := func(id string) int {
+		for i, d := range devices {
+			if d.ID == id {
+				return i + 1
+			}
+		}
+		return 0
 	}
 	persistRules := func() bool {
 		cfg.Communications = false
@@ -195,8 +199,9 @@ func RunSettings() error {
 										Name:   "settings-card",
 										Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14}, Spacing: 10},
 										Children: []Widget{
-											Label{Text: "Salida actual", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
-											Label{AssignTo: &status, Text: "Salidas de audio", Font: Font{Family: "Segoe UI", PointSize: 9}},
+											Label{Text: "Salida", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+											Label{AssignTo: &status, Text: "● Salida actual: …", TextColor: actualColor, Font: Font{Family: "Segoe UI", PointSize: 9}},
+											Label{AssignTo: &startupStatus, Text: "● Al iniciar: Ninguna", TextColor: startupColor, Font: Font{Family: "Segoe UI", PointSize: 9}},
 											ComboBox{AssignTo: &outputs},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 												PushButton{Text: "Usar esta salida", OnClicked: func() {
@@ -210,18 +215,41 @@ func RunSettings() error {
 													}
 													refreshDevices()
 												}},
+												PushButton{Text: "Al iniciar", OnClicked: func() {
+													b, ok := selected()
+													if !ok {
+														return
+													}
+													if b.DeviceID == "cycle" {
+														showError(fmt.Errorf("elige una salida concreta para aplicar al iniciar"))
+														return
+													}
+													previous := cfg
+													cfg.Startup = &StartupOutput{DeviceID: b.DeviceID, Name: b.Name}
+													if !persistRules() {
+														cfg = previous
+														return
+													}
+													refreshDevices()
+													savedNote.SetText("Salida al iniciar guardada.")
+												}},
+												PushButton{Text: "Quitar inicio", OnClicked: func() {
+													if cfg.Startup == nil {
+														return
+													}
+													previous := cfg
+													cfg.Startup = nil
+													if !persistRules() {
+														cfg = previous
+														return
+													}
+													refreshDevices()
+													savedNote.SetText("Salida al iniciar eliminada.")
+												}},
 												PushButton{Text: "Actualizar dispositivos", OnClicked: refreshDevices},
 												HSpacer{},
 											}},
-										},
-									},
-									Composite{
-										Name:   "settings-card",
-										Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14}, Spacing: 10},
-										Children: []Widget{
-											Label{Text: "Salida al iniciar", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
-											Label{Text: "Se aplica automáticamente al abrir AudioDeejSwitch, incluido el inicio con Windows.", Font: Font{Family: "Segoe UI", PointSize: 9}},
-											ComboBox{AssignTo: &startupOutputs},
+											Label{Text: "Selecciona una salida y pulsa «Al iniciar» para aplicarla al abrir la aplicación.", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
 										},
 									},
 									Composite{
@@ -270,9 +298,41 @@ func RunSettings() error {
 											Label{Text: "Lista de atajos configurados:", Font: Font{Family: "Segoe UI", PointSize: 9}},
 											ListBox{AssignTo: &shortcuts, StretchFactor: 1},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												PushButton{Text: "Eliminar seleccionado", OnClicked: func() {
-													i := shortcuts.CurrentIndex()
-													if i < 0 {
+												PushButton{Text: "Modificar", OnClicked: func() {
+													i, ok := selectedShortcut()
+													if !ok {
+														showError(fmt.Errorf("selecciona un atajo de la lista"))
+														return
+													}
+													if capturedHotkey == "" {
+														showError(fmt.Errorf("captura el nuevo atajo primero"))
+														return
+													}
+													previous := cfg
+													b := cfg.Bindings[i]
+													b.Hotkey = capturedHotkey
+													if outputs.CurrentIndex() != loadedOutputIndex {
+														if chosen, ok := selected(); ok {
+															b.DeviceID = chosen.DeviceID
+															b.Name = chosen.Name
+														}
+													}
+													cfg.Bindings[i] = b
+													if !persistRules() {
+														cfg = previous
+														refreshRules()
+														return
+													}
+													refreshRules()
+													shortcuts.SetCurrentIndex(i)
+													capturedHotkey = ""
+													capture.stop()
+													hotkey.SetText(b.Hotkey)
+													savedNote.SetText("Atajo modificado.")
+												}},
+												PushButton{Text: "Eliminar", OnClicked: func() {
+													i, ok := selectedShortcut()
+													if !ok {
 														return
 													}
 													previous := cfg
@@ -284,6 +344,9 @@ func RunSettings() error {
 													}
 													refreshRules()
 													shortcuts.SetCurrentIndex(-1)
+													capturedHotkey = ""
+													capture.stop()
+													hotkey.SetText("")
 												}},
 												HSpacer{},
 												Label{AssignTo: &savedNote, Text: "", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
@@ -364,33 +427,20 @@ func RunSettings() error {
 	})
 	configureShortcutList(shortcuts)
 	mw.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
-	startupOutputs.CurrentIndexChanged().Attach(func() {
-		if startupRefreshing {
-			return
-		}
-		index := startupOutputs.CurrentIndex()
-		if index < 0 || index >= len(startupChoices) {
-			return
-		}
-		previous := cfg
-		if startupChoices[index] == nil {
-			cfg.Startup = nil
-		} else {
-			choice := *startupChoices[index]
-			cfg.Startup = &choice
-		}
-		if !persistRules() {
-			cfg = previous
-			refreshStartupCombo()
-			return
-		}
-		refreshStartupCombo()
-		if savedNote != nil {
-			savedNote.SetText("Salida de inicio guardada.")
-		}
-	})
 	refreshDevices()
 	refreshRules()
+	shortcuts.CurrentIndexChanged().Attach(func() {
+		i, ok := selectedShortcut()
+		if !ok {
+			return
+		}
+		b := cfg.Bindings[i]
+		capturedHotkey = ""
+		capture.stop()
+		hotkey.SetText(b.Hotkey)
+		loadedOutputIndex = outputIndexForDevice(b.DeviceID)
+		outputs.SetCurrentIndex(loadedOutputIndex)
+	})
 	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		text := strings.ReplaceAll(editor.Text(), "\r\n", "\n")
 		if text != strings.ReplaceAll(string(original), "\r\n", "\n") {
