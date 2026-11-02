@@ -191,7 +191,7 @@ func RunSettings() error {
 										Layout: VBox{Margins: Margins{Left: 14, Top: 12, Right: 14, Bottom: 14}, Spacing: 10},
 										Children: []Widget{
 											Composite{Layout: HBox{MarginsZero: true, Spacing: 8}, Children: []Widget{
-												Label{Text: "Salida", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+												Label{Text: "Salidas", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
 												HSpacer{},
 												PushButton{
 													Text:        "⟳",
@@ -244,7 +244,6 @@ func RunSettings() error {
 												}},
 												HSpacer{},
 											}},
-											Label{Text: "Selecciona una salida y pulsa «Al iniciar» para aplicarla al abrir la aplicación.", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
 										},
 									},
 									Composite{
