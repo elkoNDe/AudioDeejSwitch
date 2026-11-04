@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,16 +18,18 @@ type wcaSessionFinder struct {
 	logger        *zap.SugaredLogger
 	sessionLogger *zap.SugaredLogger
 
+	worker *comWorker
+
 	eventCtx *ole.GUID // needed for some session actions to successfully notify other audio consumers
 
 	// needed for device change notifications
 	mmDeviceEnumerator      *wca.IMMDeviceEnumerator
 	mmNotificationClient    *wca.IMMNotificationClient
-	lastDefaultDeviceChange time.Time
+	lastDefaultDeviceChange atomic.Int64
 
 	// our master input and output sessions
-	masterOut *masterSession
-	masterIn  *masterSession
+	masterOut atomic.Pointer[masterSession]
+	masterIn  atomic.Pointer[masterSession]
 }
 
 const (
@@ -43,9 +46,15 @@ const (
 )
 
 func newSessionFinder(logger *zap.SugaredLogger) (SessionFinder, error) {
+	worker, err := newCOMWorker()
+	if err != nil {
+		return nil, fmt.Errorf("initialize COM worker: %w", err)
+	}
+
 	sf := &wcaSessionFinder{
 		logger:        logger.Named("session_finder"),
 		sessionLogger: logger.Named("sessions"),
+		worker:        worker,
 		eventCtx:      ole.NewGUID(myteriousGUID),
 	}
 
@@ -55,39 +64,36 @@ func newSessionFinder(logger *zap.SugaredLogger) (SessionFinder, error) {
 }
 
 func (sf *wcaSessionFinder) GetAllSessions() ([]Session, error) {
+	var sessions []Session
+	var resultErr error
+
+	if err := sf.worker.call(func() {
+		sessions, resultErr = sf.getAllSessionsOnWorker()
+	}); err != nil {
+		return nil, fmt.Errorf("run on COM worker: %w", err)
+	}
+
+	return sessions, resultErr
+}
+
+func (sf *wcaSessionFinder) getAllSessionsOnWorker() ([]Session, error) {
 	sessions := []Session{}
+	success := false
 
-	// we must call this every time we're about to list devices, i think. could be wrong
-	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
-
-		// if the error is "Incorrect function" that corresponds to 0x00000001,
-		// which represents E_FALSE in COM error handling. this is fine for this function,
-		// and just means that the call was redundant.
-		const eFalse = 1
-		oleError := &ole.OleError{}
-
-		if errors.As(err, &oleError) {
-			if oleError.Code() == eFalse {
-				sf.logger.Warn("CoInitializeEx failed with E_FALSE due to redundant invocation")
-			} else {
-				sf.logger.Warnw("Failed to call CoInitializeEx",
-					"isOleError", true,
-					"error", err,
-					"oleError", oleError)
-
-				return nil, fmt.Errorf("call CoInitializeEx: %w", err)
-			}
-		} else {
-			sf.logger.Warnw("Failed to call CoInitializeEx",
-				"isOleError", false,
-				"error", err,
-				"oleError", nil)
-
-			return nil, fmt.Errorf("call CoInitializeEx: %w", err)
+	// On any error, release the sessions we managed to create before bailing
+	// out. We're already on the COM thread, so call the worker-bound release
+	// helpers directly instead of dispatching back into the worker.
+	defer func() {
+		if success {
+			return
 		}
 
-	}
-	defer ole.CoUninitialize()
+		for _, session := range sessions {
+			if workerSession, ok := session.(interface{ releaseOnWorker() }); ok {
+				workerSession.releaseOnWorker()
+			}
+		}
+	}()
 
 	// ensure we have a device enumerator
 	if err := sf.getDeviceEnumerator(); err != nil {
@@ -118,23 +124,24 @@ func (sf *wcaSessionFinder) GetAllSessions() ([]Session, error) {
 	}
 
 	// get the master output session
-	sf.masterOut, err = sf.getMasterSession(defaultOutputEndpoint, masterSessionName, masterSessionName)
+	masterOut, err := sf.getMasterSession(defaultOutputEndpoint, masterSessionName, masterSessionName)
 	if err != nil {
 		sf.logger.Warnw("Failed to get master audio output session", "error", err)
 		return nil, fmt.Errorf("get master audio output session: %w", err)
 	}
 
-	sessions = append(sessions, sf.masterOut)
+	sessions = append(sessions, masterOut)
 
 	// get the master input session, if a default input device exists
+	var masterIn *masterSession
 	if defaultInputEndpoint != nil {
-		sf.masterIn, err = sf.getMasterSession(defaultInputEndpoint, inputSessionName, inputSessionName)
+		masterIn, err = sf.getMasterSession(defaultInputEndpoint, inputSessionName, inputSessionName)
 		if err != nil {
 			sf.logger.Warnw("Failed to get master audio input session", "error", err)
 			return nil, fmt.Errorf("get master audio input session: %w", err)
 		}
 
-		sessions = append(sessions, sf.masterIn)
+		sessions = append(sessions, masterIn)
 	}
 
 	// enumerate all devices and make their "master" sessions bindable by friendly name;
@@ -144,14 +151,26 @@ func (sf *wcaSessionFinder) GetAllSessions() ([]Session, error) {
 		return nil, fmt.Errorf("enumerate device sessions: %w", err)
 	}
 
+	sf.masterOut.Store(masterOut)
+	sf.masterIn.Store(masterIn)
+
+	success = true
 	return sessions, nil
 }
 
 func (sf *wcaSessionFinder) Release() error {
+	releaseErr := sf.worker.call(func() {
+		// skip unregistering the mmnotificationclient, as it's not implemented in go-wca
+		if sf.mmDeviceEnumerator != nil {
+			sf.mmDeviceEnumerator.Release()
+			sf.mmDeviceEnumerator = nil
+		}
+	})
 
-	// skip unregistering the mmnotificationclient, as it's not implemented in go-wca
-	if sf.mmDeviceEnumerator != nil {
-		sf.mmDeviceEnumerator.Release()
+	sf.worker.stop()
+
+	if releaseErr != nil {
+		return fmt.Errorf("release COM resources: %w", releaseErr)
 	}
 
 	sf.logger.Debug("Released WCA session finder instance")
@@ -231,7 +250,7 @@ func (sf *wcaSessionFinder) getMasterSession(mmDevice *wca.IMMDevice, key string
 	}
 
 	// create the master session
-	master, err := newMasterSession(sf.sessionLogger, audioEndpointVolume, sf.eventCtx, key, loggerKey)
+	master, err := newMasterSession(sf.sessionLogger, sf.worker, audioEndpointVolume, sf.eventCtx, key, loggerKey)
 	if err != nil {
 		sf.logger.Warnw("Failed to create master session instance", "error", err)
 		return nil, fmt.Errorf("create master session: %w", err)
@@ -482,7 +501,7 @@ func (sf *wcaSessionFinder) enumerateAndAddProcessSessions(
 		simpleAudioVolume := (*wca.ISimpleAudioVolume)(unsafe.Pointer(dispatch))
 
 		// create the deej session object
-		newSession, err := newWCASession(sf.sessionLogger, audioSessionControl2, simpleAudioVolume, pid, sf.eventCtx)
+		newSession, err := newWCASession(sf.sessionLogger, sf.worker, audioSessionControl2, simpleAudioVolume, pid, sf.eventCtx)
 		if err != nil {
 
 			// this could just mean this process is already closed by now, and the session will be cleaned up later by the OS
@@ -517,21 +536,26 @@ func (sf *wcaSessionFinder) defaultDeviceChangedCallback(
 ) (hResult uintptr) {
 
 	// filter out calls that happen in rapid succession
-	now := time.Now()
+	now := time.Now().UnixNano()
+	threshold := minDefaultDeviceChangeThreshold.Nanoseconds()
+	lastChange := sf.lastDefaultDeviceChange.Load()
 
-	if sf.lastDefaultDeviceChange.Add(minDefaultDeviceChangeThreshold).After(now) {
+	if lastChange != 0 && now-lastChange < threshold {
 		return
 	}
 
-	sf.lastDefaultDeviceChange = now
-
-	sf.logger.Debug("Default audio device changed, marking master sessions as stale")
-	if sf.masterOut != nil {
-		sf.masterOut.markAsStale()
+	if !sf.lastDefaultDeviceChange.CompareAndSwap(lastChange, now) {
+		return
 	}
 
-	if sf.masterIn != nil {
-		sf.masterIn.markAsStale()
+	sf.logger.Debug("Default audio device changed, marking master sessions as stale")
+
+	if master := sf.masterOut.Load(); master != nil {
+		master.markAsStale()
+	}
+
+	if master := sf.masterIn.Load(); master != nil {
+		master.markAsStale()
 	}
 
 	return

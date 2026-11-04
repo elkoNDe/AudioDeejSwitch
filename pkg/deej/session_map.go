@@ -3,12 +3,13 @@ package deej
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/omriharel/deej/pkg/deej/util"
-	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
 )
 
@@ -17,12 +18,16 @@ type sessionMap struct {
 	logger *zap.SugaredLogger
 
 	m    map[string][]Session
-	lock sync.Locker
+	lock sync.RWMutex
 
 	sessionFinder SessionFinder
 
+	refreshLock           sync.Mutex
+	refreshRequests       chan struct{}
+	refreshForceRequested atomic.Bool
+
 	lastSessionRefresh time.Time
-	unmappedSessions   []Session
+	unmappedKeys       []string
 }
 
 const (
@@ -52,6 +57,10 @@ const (
 	// to manually refresh sessions). a cleaner way to do this down the line is by registering to notifications
 	// whenever a new session is added, but that's too hard to justify for how easy this solution is
 	maxTimeBetweenSessionRefreshes = time.Second * 45
+
+	// unmapped sessions change more often than the rest of the map (e.g. a game starting),
+	// so refresh them a bit more aggressively while a slider actually uses deej.unmapped
+	maxTimeBetweenUnmappedRefreshes = time.Second * 15
 )
 
 // this matches friendly device names (on Windows), e.g. "Headphones (Realtek Audio)"
@@ -61,11 +70,11 @@ func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionF
 	logger = logger.Named("sessions")
 
 	m := &sessionMap{
-		deej:          deej,
-		logger:        logger,
-		m:             make(map[string][]Session),
-		lock:          &sync.Mutex{},
-		sessionFinder: sessionFinder,
+		deej:            deej,
+		logger:          logger,
+		m:               make(map[string][]Session),
+		sessionFinder:   sessionFinder,
+		refreshRequests: make(chan struct{}, 1),
 	}
 
 	logger.Debug("Created session map instance")
@@ -78,6 +87,8 @@ func (m *sessionMap) initialize() error {
 		m.logger.Warnw("Failed to get all sessions during session map initialization", "error", err)
 		return fmt.Errorf("get all sessions during init: %w", err)
 	}
+
+	go m.runRefreshWorker()
 
 	m.setupOnConfigReload()
 	m.setupOnSliderMove()
@@ -94,44 +105,97 @@ func (m *sessionMap) release() error {
 	return nil
 }
 
-// assumes the session map is clean!
-// only call on a new session map or as part of refreshSessions which calls reset
 func (m *sessionMap) getAndAddSessions() error {
-
-	// mark that we're refreshing before anything else
-	m.lastSessionRefresh = time.Now()
-	m.unmappedSessions = nil
-
-	sessions, err := m.sessionFinder.GetAllSessions()
+	newMap, unmappedKeys, err := m.loadSessions()
 	if err != nil {
-		m.logger.Warnw("Failed to get sessions from session finder", "error", err)
-		return fmt.Errorf("get sessions from SessionFinder: %w", err)
+		return err
 	}
 
-	for _, session := range sessions {
-		m.add(session)
-
-		if !m.sessionMapped(session) {
-			m.logger.Debugw("Tracking unmapped session", "session", session)
-			m.unmappedSessions = append(m.unmappedSessions, session)
-		}
-	}
-
+	m.replaceSessions(newMap, unmappedKeys, time.Now())
 	m.logger.Infow("Got all audio sessions successfully", "sessionMap", m)
 
 	return nil
+}
+
+func (m *sessionMap) loadSessions() (map[string][]Session, []string, error) {
+	sessions, err := m.sessionFinder.GetAllSessions()
+	if err != nil {
+		m.logger.Warnw("Failed to get sessions from session finder", "error", err)
+		return nil, nil, fmt.Errorf("get sessions from SessionFinder: %w", err)
+	}
+
+	mapping := m.deej.config.GetSliderMapping()
+	dynamicallyMapped := m.currentWindowKeysIfNeeded(mapping)
+
+	newMap := make(map[string][]Session, len(sessions))
+	unmappedKeysSet := make(map[string]struct{})
+
+	for _, session := range sessions {
+		key := session.Key()
+
+		newMap[key] = append(newMap[key], session)
+
+		if !m.sessionMapped(key, dynamicallyMapped, mapping) {
+			m.logger.Debugw("Tracking unmapped session", "session", session)
+			unmappedKeysSet[key] = struct{}{}
+		}
+	}
+
+	unmappedKeys := make([]string, 0, len(unmappedKeysSet))
+	for key := range unmappedKeysSet {
+		unmappedKeys = append(unmappedKeys, key)
+	}
+	sort.Strings(unmappedKeys)
+
+	return newMap, unmappedKeys, nil
+}
+
+func (m *sessionMap) replaceSessions(newMap map[string][]Session, unmappedKeys []string, refreshedAt time.Time) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	oldMap := m.m
+	m.m = newMap
+	m.unmappedKeys = unmappedKeys
+	m.lastSessionRefresh = refreshedAt
+
+	// Release the old sessions while holding the write lock. Readers hold the
+	// read lock while using a session, so no one can be using these anymore.
+	for _, sessions := range oldMap {
+		for _, session := range sessions {
+			session.Release()
+		}
+	}
+}
+
+func (m *sessionMap) runRefreshWorker() {
+	for range m.refreshRequests {
+		force := m.refreshForceRequested.Swap(false)
+		m.refreshSessions(force)
+	}
+}
+
+// requestRefresh schedules a refresh without blocking the caller. Multiple
+// requests are collapsed into a single pending refresh.
+func (m *sessionMap) requestRefresh(force bool) {
+	if force {
+		m.refreshForceRequested.Store(true)
+	}
+
+	select {
+	case m.refreshRequests <- struct{}{}:
+	default:
+		// A refresh is already pending.
+	}
 }
 
 func (m *sessionMap) setupOnConfigReload() {
 	configReloadedChannel := m.deej.config.SubscribeToChanges()
 
 	go func() {
-		for {
-			select {
-			case <-configReloadedChannel:
-				m.logger.Info("Detected config reload, attempting to re-acquire all audio sessions")
-				m.refreshSessions(false)
-			}
+		for range configReloadedChannel {
+			m.logger.Info("Detected config reload, attempting to re-acquire all audio sessions")
+			m.requestRefresh(false)
 		}
 	}()
 }
@@ -140,52 +204,78 @@ func (m *sessionMap) setupOnSliderMove() {
 	sliderEventsChannel := m.deej.serial.SubscribeToSliderMoveEvents()
 
 	go func() {
-		for {
-			select {
-			case event := <-sliderEventsChannel:
-				m.handleSliderMoveEvent(event)
-			}
+		for event := range sliderEventsChannel {
+			m.handleSliderMoveEvent(event)
 		}
 	}()
 }
 
 // performance: explain why force == true at every such use to avoid unintended forced refresh spams
 func (m *sessionMap) refreshSessions(force bool) {
+	m.refreshLock.Lock()
+	defer m.refreshLock.Unlock()
 
 	// make sure enough time passed since the last refresh, unless force is true in which case always clear
-	if !force && m.lastSessionRefresh.Add(minTimeBetweenSessionRefreshes).After(time.Now()) {
+	if !force && !m.refreshOlderThan(minTimeBetweenSessionRefreshes) {
 		return
 	}
 
-	// clear and release sessions first
-	m.clear()
-
-	if err := m.getAndAddSessions(); err != nil {
+	newMap, unmappedKeys, err := m.loadSessions()
+	if err != nil {
 		m.logger.Warnw("Failed to re-acquire all audio sessions", "error", err)
-	} else {
-		m.logger.Debug("Re-acquired sessions successfully")
+
+		// Throttle retries even when the refresh failed.
+		m.lock.Lock()
+		m.lastSessionRefresh = time.Now()
+		m.lock.Unlock()
+		return
 	}
+
+	m.replaceSessions(newMap, unmappedKeys, time.Now())
+	m.logger.Debug("Re-acquired sessions successfully")
+}
+
+func (m *sessionMap) refreshOlderThan(maxAge time.Duration) bool {
+	m.lock.RLock()
+	lastRefresh := m.lastSessionRefresh
+	m.lock.RUnlock()
+
+	return lastRefresh.Add(maxAge).Before(time.Now())
 }
 
 // returns true if a session is not currently mapped to any slider, false otherwise
 // special sessions (master, system, mic) and device-specific sessions always count as mapped,
 // even when absent from the config. this makes sense for every current feature that uses "unmapped sessions"
-func (m *sessionMap) sessionMapped(session Session) bool {
+func (m *sessionMap) sessionMapped(key string, dynamicallyMapped map[string]struct{}, mapping *sliderMap) bool {
 
 	// count master/system/mic as mapped
-	if funk.ContainsString([]string{masterSessionName, systemSessionName, inputSessionName}, session.Key()) {
+	if isSpecialSessionKey(key) {
 		return true
 	}
 
 	// count device sessions as mapped
-	if deviceSessionKeyPattern.MatchString(session.Key()) {
+	if deviceSessionKeyPattern.MatchString(key) {
 		return true
+	}
+
+	// count the currently active window as mapped if deej.current is in use,
+	// otherwise an app could be controlled by both deej.current and deej.unmapped
+	if _, ok := dynamicallyMapped[key]; ok {
+		return true
+	}
+
+	if mapping == nil {
+		return false
 	}
 
 	matchFound := false
 
 	// look through the actual mappings
-	m.deej.config.SliderMapping.iterate(func(sliderIdx int, targets []string) {
+	mapping.iterate(func(sliderIdx int, targets []string) {
+		if matchFound {
+			return
+		}
+
 		for _, target := range targets {
 
 			// ignore special transforms
@@ -193,10 +283,7 @@ func (m *sessionMap) sessionMapped(session Session) bool {
 				continue
 			}
 
-			// safe to assume this has a single element because we made sure there's no special transform
-			target = m.resolveTarget(target)[0]
-
-			if target == session.Key() {
+			if strings.ToLower(target) == key {
 				matchFound = true
 				return
 			}
@@ -207,15 +294,22 @@ func (m *sessionMap) sessionMapped(session Session) bool {
 }
 
 func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
+	mapping := m.deej.config.GetSliderMapping()
+	if mapping == nil {
+		return
+	}
 
 	// first of all, ensure our session map isn't moldy
-	if m.lastSessionRefresh.Add(maxTimeBetweenSessionRefreshes).Before(time.Now()) {
+	if m.refreshOlderThan(maxTimeBetweenSessionRefreshes) {
 		m.logger.Debug("Stale session map detected on slider move, refreshing")
-		m.refreshSessions(true)
+		m.requestRefresh(true)
+	} else if m.refreshOlderThan(maxTimeBetweenUnmappedRefreshes) &&
+		m.configUsesSpecialTarget(mapping, specialTargetAllUnmapped) {
+		m.requestRefresh(false)
 	}
 
 	// get the targets mapped to this slider from the config
-	targets, ok := m.deej.config.SliderMapping.get(event.SliderID)
+	targets, ok := mapping.get(event.SliderID)
 
 	// if slider not found in config, silently ignore
 	if !ok {
@@ -235,25 +329,10 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 		// for each resolved target...
 		for _, resolvedTarget := range resolvedTargets {
 
-			// check the map for matching sessions
-			sessions, ok := m.get(resolvedTarget)
-
-			// no sessions matching this target - move on
-			if !ok {
-				continue
-			}
-
-			targetFound = true
-
-			// iterate all matching sessions and adjust the volume of each one
-			for _, session := range sessions {
-				if session.GetVolume() != event.PercentValue {
-					if err := session.SetVolume(event.PercentValue); err != nil {
-						m.logger.Warnw("Failed to set target session volume", "error", err)
-						adjustmentFailed = true
-					}
-				}
-			}
+			// check the map for matching sessions and adjust them atomically
+			found, failed := m.adjustSessions(resolvedTarget, event.PercentValue)
+			targetFound = targetFound || found
+			adjustmentFailed = adjustmentFailed || failed
 		}
 	}
 
@@ -261,18 +340,37 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 	// processes could've opened since the last time this slider moved.
 	// if they haven't, the cooldown will take care to not spam it up
 	if !targetFound {
-		m.refreshSessions(false)
+		m.requestRefresh(false)
 	} else if adjustmentFailed {
-
-		// performance: the reason that forcing a refresh here is okay is that we'll only get here
-		// when a session's SetVolume call errored, such as in the case of a stale master session
-		// (or another, more catastrophic failure happens)
-		m.refreshSessions(true)
+		m.requestRefresh(true)
 	}
 }
 
+// adjustSessions keeps the read lock while talking to the sessions. This
+// prevents a concurrent refresh from releasing a session that is in use.
+func (m *sessionMap) adjustSessions(key string, value float32) (found bool, failed bool) {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
+	sessions, ok := m.m[key]
+	if !ok {
+		return false, false
+	}
+
+	for _, session := range sessions {
+		if session.GetVolume() != value {
+			if err := session.SetVolume(value); err != nil {
+				m.logger.Warnw("Failed to set target session volume", "error", err)
+				failed = true
+			}
+		}
+	}
+
+	return true, failed
+}
+
 func (m *sessionMap) targetHasSpecialTransform(target string) bool {
-	return strings.HasPrefix(target, specialTargetTransformPrefix)
+	return strings.HasPrefix(strings.ToLower(target), specialTargetTransformPrefix)
 }
 
 func (m *sessionMap) resolveTarget(target string) []string {
@@ -303,18 +401,45 @@ func (m *sessionMap) applyTargetTransform(specialTargetName string) []string {
 		}
 
 		// we could have gotten a non-lowercase names from that, so let's ensure we return ones that are lowercase
-		for targetIdx, target := range currentWindowProcessNames {
-			currentWindowProcessNames[targetIdx] = strings.ToLower(target)
+		result := make([]string, 0, len(currentWindowProcessNames))
+		seen := make(map[string]struct{}, len(currentWindowProcessNames))
+
+		for _, target := range currentWindowProcessNames {
+			lowercaseTarget := strings.ToLower(target)
+			if _, ok := seen[lowercaseTarget]; ok {
+				continue
+			}
+
+			seen[lowercaseTarget] = struct{}{}
+			result = append(result, lowercaseTarget)
 		}
 
-		// remove dupes
-		return funk.UniqString(currentWindowProcessNames)
+		return result
 
 	// get currently unmapped sessions
 	case specialTargetAllUnmapped:
-		targetKeys := make([]string, len(m.unmappedSessions))
-		for sessionIdx, session := range m.unmappedSessions {
-			targetKeys[sessionIdx] = session.Key()
+		m.lock.RLock()
+		targetKeys := append([]string(nil), m.unmappedKeys...)
+		m.lock.RUnlock()
+
+		// If deej.current is in use, exclude the currently active window from
+		// the unmapped group to avoid controlling the same app twice.
+		if m.configUsesSpecialTarget(m.deej.config.GetSliderMapping(), specialTargetCurrentWindow) {
+			if currentWindowProcessNames, err := util.GetCurrentWindowProcessNames(); err == nil {
+				excluded := make(map[string]struct{}, len(currentWindowProcessNames))
+				for _, target := range currentWindowProcessNames {
+					excluded[strings.ToLower(target)] = struct{}{}
+				}
+
+				filteredTargetKeys := targetKeys[:0]
+				for _, targetKey := range targetKeys {
+					if _, ok := excluded[targetKey]; ok {
+						continue
+					}
+					filteredTargetKeys = append(filteredTargetKeys, targetKey)
+				}
+				targetKeys = filteredTargetKeys
+			}
 		}
 
 		return targetKeys
@@ -323,48 +448,60 @@ func (m *sessionMap) applyTargetTransform(specialTargetName string) []string {
 	return nil
 }
 
-func (m *sessionMap) add(value Session) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	key := value.Key()
-
-	existing, ok := m.m[key]
-	if !ok {
-		m.m[key] = []Session{value}
-	} else {
-		m.m[key] = append(existing, value)
+func (m *sessionMap) currentWindowKeysIfNeeded(mapping *sliderMap) map[string]struct{} {
+	if !m.configUsesSpecialTarget(mapping, specialTargetCurrentWindow) {
+		return nil
 	}
+
+	processNames, err := util.GetCurrentWindowProcessNames()
+	if err != nil {
+		return nil
+	}
+
+	result := make(map[string]struct{}, len(processNames))
+	for _, processName := range processNames {
+		result[strings.ToLower(processName)] = struct{}{}
+	}
+
+	return result
 }
 
-func (m *sessionMap) get(key string) ([]Session, bool) {
-	m.lock.Lock()
-	defer m.lock.Unlock()
+func (m *sessionMap) configUsesSpecialTarget(mapping *sliderMap, specialTargetName string) bool {
+	if mapping == nil {
+		return false
+	}
 
-	value, ok := m.m[key]
-	return value, ok
-}
+	found := false
+	targetName := specialTargetTransformPrefix + specialTargetName
 
-func (m *sessionMap) clear() {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	m.logger.Debug("Releasing and clearing all audio sessions")
-
-	for key, sessions := range m.m {
-		for _, session := range sessions {
-			session.Release()
+	mapping.iterate(func(sliderIdx int, targets []string) {
+		if found {
+			return
 		}
 
-		delete(m.m, key)
+		for _, target := range targets {
+			if strings.ToLower(target) == targetName {
+				found = true
+				return
+			}
+		}
+	})
+
+	return found
+}
+
+func isSpecialSessionKey(key string) bool {
+	switch key {
+	case masterSessionName, systemSessionName, inputSessionName:
+		return true
 	}
 
-	m.logger.Debug("Session map cleared")
+	return false
 }
 
 func (m *sessionMap) String() string {
-	m.lock.Lock()
-	defer m.lock.Unlock()
+	m.lock.RLock()
+	defer m.lock.RUnlock()
 
 	sessionCount := 0
 

@@ -12,8 +12,9 @@ el protocolo serie y `config.yaml`, y añade selección de salida y atajos globa
 4. Clic derecho en su icono → **Configuración**.
 5. Selecciona una salida, pulsa **Capturar**, pulsa la combinación que quieras
    (por ejemplo `Ctrl+Alt+F8`) y pulsa **Añadir atajo**. El atajo se guarda
-   automáticamente. Para cambiar uno existente, selecciónalo en la lista, captura
-   la nueva combinación y pulsa **Modificar**. También puedes asignar un atajo a
+   automáticamente. Para cambiar uno existente, selecciónalo en la lista, pulsa
+   **Capturar**, pulsa la nueva combinación, pulsa **Añadir atajo** y elimina el
+   anterior con **Eliminar**. También puedes asignar un atajo a
    **Siguiente salida disponible (alternar)**.
 
 Para abrir la configuración sin conectar con el Arduino, ejecuta **`Configurar.cmd`**
@@ -42,8 +43,8 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
   ventana, se evita sobrescribirlo. En el editor de deej puedes recargarlo;
   para recargar los atajos, cierra y vuelve a abrir la ventana.
 - Configuración de atajos en `switcher.yaml`, recargada en aproximadamente un
-  segundo sin reiniciar deej. Los cambios se guardan automáticamente al añadir,
-  modificar o eliminar un atajo. Un YAML de atajos inválido conserva la
+  segundo sin reiniciar deej. Los cambios se guardan automáticamente al añadir o
+  eliminar un atajo. Un YAML de atajos inválido conserva la
   configuración activa anterior. Los atajos ocupados o reservados se notifican y
   no se registran. Tienes una plantilla sin datos personales en
   `switcher.example.yaml`.
@@ -90,10 +91,11 @@ fijada `v0.10.2` y rechaza los antiguos backends de notificaciones basados en sc
 
 Para regenerar también todo el código compilado, usa `.\build.ps1 -Clean`.
 
-En Windows, los avisos usan directamente `Shell_NotifyIcon`: no generan scripts
-ni ejecutan PowerShell. Mientras se muestra un aviso puede aparecer un icono
-adicional de notificación, que se retira tras 15 segundos sin mensajes nuevos.
-Windows puede ocultar los avisos según sus ajustes de notificaciones.
+En Windows, los avisos usan directamente `Shell_NotifyIcon` sobre el mismo icono
+de la bandeja: no generan scripts, no ejecutan PowerShell y no crean un icono
+adicional. Solo si la bandeja aún no está disponible se usa un icono temporal,
+que se retira tras 15 segundos sin mensajes nuevos. Windows puede ocultar los
+avisos según sus ajustes de notificaciones.
 
 Las pruebas nativas enumeran dispositivos, comprueban la disponibilidad de la
 interfaz de cambio de salida y verifican registro, recarga y liberación de atajos

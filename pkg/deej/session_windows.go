@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	ole "github.com/go-ole/go-ole"
 	ps "github.com/mitchellh/go-ps"
@@ -20,6 +21,8 @@ type wcaSession struct {
 	pid         uint32
 	processName string
 
+	worker *comWorker
+
 	control *wca.IAudioSessionControl2
 	volume  *wca.ISimpleAudioVolume
 
@@ -29,15 +32,18 @@ type wcaSession struct {
 type masterSession struct {
 	baseSession
 
+	worker *comWorker
+
 	volume *wca.IAudioEndpointVolume
 
 	eventCtx *ole.GUID
 
-	stale bool // when set to true, we should refresh sessions on the next call to SetVolume
+	stale atomic.Bool // when set to true, we should refresh sessions on the next call to SetVolume
 }
 
 func newWCASession(
 	logger *zap.SugaredLogger,
+	worker *comWorker,
 	control *wca.IAudioSessionControl2,
 	volume *wca.ISimpleAudioVolume,
 	pid uint32,
@@ -45,6 +51,7 @@ func newWCASession(
 ) (*wcaSession, error) {
 
 	s := &wcaSession{
+		worker:   worker,
 		control:  control,
 		volume:   volume,
 		pid:      pid,
@@ -62,15 +69,21 @@ func newWCASession(
 		process, err := ps.FindProcess(int(pid))
 		if err != nil {
 			logger.Warnw("Failed to find process name by ID", "pid", pid, "error", err)
-			defer s.Release()
+
+			// We're already on the COM thread, so release the handles directly
+			// instead of dispatching back through the worker.
+			control.Release()
+			volume.Release()
 
 			return nil, fmt.Errorf("find process name by pid: %w", err)
 		}
 
 		// this PID may be invalid - this means the process has already been
-		// closed and we shouldn't create a session for it.
+		// closed and we shouldn't create a session for it. The caller owns the
+		// handles in this case and releases them after seeing errNoSuchProcess.
 		if process == nil {
 			logger.Debugw("Process already exited, not creating audio session", "pid", pid)
+
 			return nil, errNoSuchProcess
 		}
 
@@ -79,15 +92,21 @@ func newWCASession(
 		s.humanReadableDesc = fmt.Sprintf("%s (pid %d)", s.processName, s.pid)
 	}
 
-	// use a self-identifying session name e.g. deej.sessions.chrome
+	// use a self-identifying session name e.g. deej.sessions.chrome.
+	// Do not log the session object itself here: String() reads the volume,
+	// which would dispatch back into the COM worker and deadlock.
 	s.logger = logger.Named(strings.TrimSuffix(s.Key(), ".exe"))
-	s.logger.Debugw(sessionCreationLogMessage, "session", s)
+	s.logger.Debugw(sessionCreationLogMessage,
+		"session", s.name,
+		"pid", s.pid,
+		"system", s.system)
 
 	return s, nil
 }
 
 func newMasterSession(
 	logger *zap.SugaredLogger,
+	worker *comWorker,
 	volume *wca.IAudioEndpointVolume,
 	eventCtx *ole.GUID,
 	key string,
@@ -95,6 +114,7 @@ func newMasterSession(
 ) (*masterSession, error) {
 
 	s := &masterSession{
+		worker:   worker,
 		volume:   volume,
 		eventCtx: eventCtx,
 	}
@@ -104,12 +124,24 @@ func newMasterSession(
 	s.name = key
 	s.humanReadableDesc = key
 
-	s.logger.Debugw(sessionCreationLogMessage, "session", s)
+	s.logger.Debugw(sessionCreationLogMessage, "session", key)
 
 	return s, nil
 }
 
 func (s *wcaSession) GetVolume() float32 {
+	var level float32
+
+	if err := s.worker.call(func() {
+		level = s.getVolumeOnWorker()
+	}); err != nil {
+		s.logger.Warnw("Failed to get session volume", "error", err)
+	}
+
+	return level
+}
+
+func (s *wcaSession) getVolumeOnWorker() float32 {
 	var level float32
 
 	if err := s.volume.GetMasterVolume(&level); err != nil {
@@ -120,6 +152,18 @@ func (s *wcaSession) GetVolume() float32 {
 }
 
 func (s *wcaSession) SetVolume(v float32) error {
+	var result error
+
+	if err := s.worker.call(func() {
+		result = s.setVolumeOnWorker(v)
+	}); err != nil {
+		return fmt.Errorf("run session volume adjustment: %w", err)
+	}
+
+	return result
+}
+
+func (s *wcaSession) setVolumeOnWorker(v float32) error {
 	if err := s.volume.SetMasterVolume(v, s.eventCtx); err != nil {
 		s.logger.Warnw("Failed to set session volume", "error", err)
 		return fmt.Errorf("adjust session volume: %w", err)
@@ -144,10 +188,23 @@ func (s *wcaSession) SetVolume(v float32) error {
 }
 
 func (s *wcaSession) Release() {
+	if err := s.worker.call(s.releaseOnWorker); err != nil {
+		s.logger.Debugw("Failed to release audio session", "error", err)
+	}
+}
+
+func (s *wcaSession) releaseOnWorker() {
 	s.logger.Debug("Releasing audio session")
 
-	s.volume.Release()
-	s.control.Release()
+	if s.volume != nil {
+		s.volume.Release()
+		s.volume = nil
+	}
+
+	if s.control != nil {
+		s.control.Release()
+		s.control = nil
+	}
 }
 
 func (s *wcaSession) String() string {
@@ -155,6 +212,18 @@ func (s *wcaSession) String() string {
 }
 
 func (s *masterSession) GetVolume() float32 {
+	var level float32
+
+	if err := s.worker.call(func() {
+		level = s.getVolumeOnWorker()
+	}); err != nil {
+		s.logger.Warnw("Failed to get session volume", "error", err)
+	}
+
+	return level
+}
+
+func (s *masterSession) getVolumeOnWorker() float32 {
 	var level float32
 
 	if err := s.volume.GetMasterVolumeLevelScalar(&level); err != nil {
@@ -165,7 +234,19 @@ func (s *masterSession) GetVolume() float32 {
 }
 
 func (s *masterSession) SetVolume(v float32) error {
-	if s.stale {
+	var result error
+
+	if err := s.worker.call(func() {
+		result = s.setVolumeOnWorker(v)
+	}); err != nil {
+		return fmt.Errorf("run session volume adjustment: %w", err)
+	}
+
+	return result
+}
+
+func (s *masterSession) setVolumeOnWorker(v float32) error {
+	if s.stale.Load() {
 		s.logger.Warnw("Session expired because default device has changed, triggering session refresh")
 		return errRefreshSessions
 	}
@@ -184,9 +265,18 @@ func (s *masterSession) SetVolume(v float32) error {
 }
 
 func (s *masterSession) Release() {
+	if err := s.worker.call(s.releaseOnWorker); err != nil {
+		s.logger.Debugw("Failed to release audio session", "error", err)
+	}
+}
+
+func (s *masterSession) releaseOnWorker() {
 	s.logger.Debug("Releasing audio session")
 
-	s.volume.Release()
+	if s.volume != nil {
+		s.volume.Release()
+		s.volume = nil
+	}
 }
 
 func (s *masterSession) String() string {
@@ -194,5 +284,5 @@ func (s *masterSession) String() string {
 }
 
 func (s *masterSession) markAsStale() {
-	s.stale = true
+	s.stale.Store(true)
 }

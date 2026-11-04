@@ -72,9 +72,10 @@ elimina ese mecanismo de la versión nueva; no demuestra que causara esta alerta
 
 Se sustituyó la ruta de notificaciones de Windows por `Shell_NotifyIcon`, usando
 la dependencia Win32 que ya estaba en el proyecto. Un hilo propio mantiene una
-ventana oculta para recibir mensajes del sistema, solicita los avisos y retira su
-icono temporal tras 15 segundos sin avisos nuevos. El host se cierra al detener
-deej. La ruta de Linux conserva `beeep`.
+ventana oculta para recibir mensajes del sistema y solicita los avisos sobre el
+mismo icono de la bandeja. Solo si la bandeja aún no está disponible usa un icono
+temporal, que retira tras 15 segundos sin avisos nuevos. El host se cierra al
+detener deej. La ruta de Linux conserva `beeep`.
 
 `go list -deps` y `go version -m` confirman que el ejecutable nuevo de Windows no
 incluye `github.com/gen2brain/beeep`, `github.com/go-toast/toast` ni

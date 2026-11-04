@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,11 +28,14 @@ type CanonicalConfig struct {
 
 	NoiseReductionLevel string
 
+	lock sync.RWMutex
+
 	logger             *zap.SugaredLogger
 	notifier           Notifier
 	stopWatcherChannel chan bool
 
-	reloadConsumers []chan bool
+	reloadConsumers     []chan bool
+	reloadConsumersLock sync.Mutex
 
 	userConfig     *viper.Viper
 	internalConfig *viper.Viper
@@ -143,20 +147,58 @@ func (cc *CanonicalConfig) Load() error {
 	}
 
 	cc.logger.Info("Loaded config successfully")
+
+	comPort, baudRate := cc.GetConnectionInfo()
 	cc.logger.Infow("Config values",
-		"sliderMapping", cc.SliderMapping,
-		"connectionInfo", cc.ConnectionInfo,
-		"invertSliders", cc.InvertSliders)
+		"sliderMapping", cc.GetSliderMapping(),
+		"comPort", comPort,
+		"baudRate", baudRate,
+		"invertSliders", cc.GetInvertSliders())
 
 	return nil
 }
 
 // SubscribeToChanges allows external components to receive updates when the config is reloaded
 func (cc *CanonicalConfig) SubscribeToChanges() chan bool {
-	c := make(chan bool)
+	c := make(chan bool, 1)
+
+	cc.reloadConsumersLock.Lock()
 	cc.reloadConsumers = append(cc.reloadConsumers, c)
+	cc.reloadConsumersLock.Unlock()
 
 	return c
+}
+
+// GetSliderMapping returns the current mapping in a concurrency-safe way.
+func (cc *CanonicalConfig) GetSliderMapping() *sliderMap {
+	cc.lock.RLock()
+	defer cc.lock.RUnlock()
+
+	return cc.SliderMapping
+}
+
+// GetConnectionInfo returns the serial connection parameters in a concurrency-safe way.
+func (cc *CanonicalConfig) GetConnectionInfo() (string, int) {
+	cc.lock.RLock()
+	defer cc.lock.RUnlock()
+
+	return cc.ConnectionInfo.COMPort, cc.ConnectionInfo.BaudRate
+}
+
+// GetInvertSliders returns whether sliders are inverted in a concurrency-safe way.
+func (cc *CanonicalConfig) GetInvertSliders() bool {
+	cc.lock.RLock()
+	defer cc.lock.RUnlock()
+
+	return cc.InvertSliders
+}
+
+// GetNoiseReductionLevel returns the configured noise reduction level in a concurrency-safe way.
+func (cc *CanonicalConfig) GetNoiseReductionLevel() string {
+	cc.lock.RLock()
+	defer cc.lock.RUnlock()
+
+	return cc.NoiseReductionLevel
 }
 
 // WatchConfigFileChanges starts watching for configuration file changes
@@ -218,36 +260,65 @@ func (cc *CanonicalConfig) StopWatchingConfigFile() {
 func (cc *CanonicalConfig) populateFromVipers() error {
 
 	// merge the slider mappings from the user and internal configs
-	cc.SliderMapping = sliderMapFromConfigs(
-		cc.userConfig.GetStringMapStringSlice(configKeySliderMapping),
-		cc.internalConfig.GetStringMapStringSlice(configKeySliderMapping),
-	)
+	userMapping := cc.userConfig.GetStringMapStringSlice(configKeySliderMapping)
+	internalMapping := cc.internalConfig.GetStringMapStringSlice(configKeySliderMapping)
+
+	cc.warnInvalidSliderIndices(userConfigName, userMapping)
+	cc.warnInvalidSliderIndices(internalConfigName, internalMapping)
+
+	sliderMapping := sliderMapFromConfigs(userMapping, internalMapping)
 
 	// get the rest of the config fields - viper saves us a lot of effort here
-	cc.ConnectionInfo.COMPort = cc.userConfig.GetString(configKeyCOMPort)
+	comPort := cc.userConfig.GetString(configKeyCOMPort)
 
-	cc.ConnectionInfo.BaudRate = cc.userConfig.GetInt(configKeyBaudRate)
-	if cc.ConnectionInfo.BaudRate <= 0 {
+	baudRate := cc.userConfig.GetInt(configKeyBaudRate)
+	if baudRate <= 0 {
 		cc.logger.Warnw("Invalid baud rate specified, using default value",
 			"key", configKeyBaudRate,
-			"invalidValue", cc.ConnectionInfo.BaudRate,
+			"invalidValue", baudRate,
 			"defaultValue", defaultBaudRate)
 
-		cc.ConnectionInfo.BaudRate = defaultBaudRate
+		baudRate = defaultBaudRate
 	}
 
-	cc.InvertSliders = cc.userConfig.GetBool(configKeyInvertSliders)
-	cc.NoiseReductionLevel = cc.userConfig.GetString(configKeyNoiseReductionLevel)
+	invertSliders := cc.userConfig.GetBool(configKeyInvertSliders)
+	noiseReductionLevel := cc.userConfig.GetString(configKeyNoiseReductionLevel)
+
+	cc.lock.Lock()
+	cc.SliderMapping = sliderMapping
+	cc.ConnectionInfo.COMPort = comPort
+	cc.ConnectionInfo.BaudRate = baudRate
+	cc.InvertSliders = invertSliders
+	cc.NoiseReductionLevel = noiseReductionLevel
+	cc.lock.Unlock()
 
 	cc.logger.Debug("Populated config fields from vipers")
 
 	return nil
 }
 
+func (cc *CanonicalConfig) warnInvalidSliderIndices(source string, mapping map[string][]string) {
+	for key := range mapping {
+		if _, ok := parseSliderIndex(key); !ok {
+			cc.logger.Warnw("Invalid slider index in config, ignoring it",
+				"source", source,
+				"slider", key)
+		}
+	}
+}
+
 func (cc *CanonicalConfig) onConfigReloaded() {
 	cc.logger.Debug("Notifying consumers about configuration reload")
 
-	for _, consumer := range cc.reloadConsumers {
-		consumer <- true
+	cc.reloadConsumersLock.Lock()
+	consumers := append([]chan bool(nil), cc.reloadConsumers...)
+	cc.reloadConsumersLock.Unlock()
+
+	for _, consumer := range consumers {
+		select {
+		case consumer <- true:
+		default:
+			// A notification is already pending for this consumer.
+		}
 	}
 }

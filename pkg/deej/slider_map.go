@@ -23,9 +23,12 @@ func newSliderMap() *sliderMap {
 func sliderMapFromConfigs(userMapping map[string][]string, internalMapping map[string][]string) *sliderMap {
 	resultMap := newSliderMap()
 
-	// copy targets from user config, ignoring empty values
+	// copy targets from user config, ignoring empty values and invalid slider indices
 	for sliderIdxString, targets := range userMapping {
-		sliderIdx, _ := strconv.Atoi(sliderIdxString)
+		sliderIdx, ok := parseSliderIndex(sliderIdxString)
+		if !ok {
+			continue
+		}
 
 		resultMap.set(sliderIdx, funk.FilterString(targets, func(s string) bool {
 			return s != ""
@@ -34,7 +37,10 @@ func sliderMapFromConfigs(userMapping map[string][]string, internalMapping map[s
 
 	// add targets from internal configs, ignoring duplicate or empty values
 	for sliderIdxString, targets := range internalMapping {
-		sliderIdx, _ := strconv.Atoi(sliderIdxString)
+		sliderIdx, ok := parseSliderIndex(sliderIdxString)
+		if !ok {
+			continue
+		}
 
 		existingTargets, ok := resultMap.get(sliderIdx)
 		if !ok {
@@ -50,6 +56,15 @@ func sliderMapFromConfigs(userMapping map[string][]string, internalMapping map[s
 	}
 
 	return resultMap
+}
+
+func parseSliderIndex(value string) (int, bool) {
+	sliderIdx, err := strconv.Atoi(value)
+	if err != nil || sliderIdx < 0 {
+		return 0, false
+	}
+
+	return sliderIdx, true
 }
 
 func (m *sliderMap) iterate(f func(int, []string)) {
