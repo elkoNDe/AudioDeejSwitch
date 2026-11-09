@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/omriharel/deej/internal/audioswitch"
+	"github.com/omriharel/deej/internal/updater"
 
 	"github.com/omriharel/deej/pkg/deej"
 )
@@ -51,6 +55,19 @@ func main() {
 	named := logger.Named("main")
 	named.Debug("Created logger")
 
+	// Only the main process holds the lock. The settings window is spawned as a
+	// child process with --settings and must be allowed to run alongside it.
+	releaseInstance, err := audioswitch.EnsureSingleInstance("AudioDeejSwitch")
+	if err != nil {
+		if errors.Is(err, audioswitch.ErrAlreadyRunning) {
+			named.Warn("Another AudioDeejSwitch instance is already running, exiting")
+			return
+		}
+		named.Warnw("Failed to acquire single-instance lock", "error", err)
+	} else {
+		defer releaseInstance()
+	}
+
 	named.Infow("Version info",
 		"gitCommit", gitCommit,
 		"versionTag", versionTag,
@@ -67,6 +84,17 @@ func main() {
 		named.Fatalw("Failed to create deej object", "error", err)
 	}
 
+	// Manual update checks are always available from the tray. Automatic checks
+	// only run when switcher.yaml explicitly opts in with check_updates.enabled.
+	d.SetUpdateChecks(updater.CheckUpdate)
+	if switcherConfig, cfgErr := audioswitch.LoadConfig(); cfgErr == nil &&
+		switcherConfig.CheckUpdates != nil && switcherConfig.CheckUpdates.Enabled {
+		go func() {
+			time.Sleep(3 * time.Second)
+			d.CheckForUpdatesAndNotify(context.Background())
+		}()
+	}
+
 	// if injected by build process, set version info to show up in the tray
 	if buildType != "" && (versionTag != "" || gitCommit != "") {
 		identifier := gitCommit
@@ -74,8 +102,7 @@ func main() {
 			identifier = versionTag
 		}
 
-		versionString := fmt.Sprintf("Version %s-%s", buildType, identifier)
-		d.SetVersion(versionString)
+		d.SetVersion(identifier)
 	}
 
 	// onwards, to glory

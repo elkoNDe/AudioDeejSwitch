@@ -13,9 +13,29 @@ import (
 const ConfigPath = "switcher.yaml"
 
 type Binding struct {
-	Hotkey   string `yaml:"hotkey"`
-	DeviceID string `yaml:"device_id"` // "cycle" means next active playback device.
+	Hotkey   string         `yaml:"hotkey"`
+	DeviceID string         `yaml:"device_id"` // "cycle" means next active playback device, "toggle" alternates between Toggle targets.
+	Name     string         `yaml:"name"`
+	Toggle   []ToggleTarget `yaml:"toggle,omitempty"`
+}
+
+type ToggleTarget struct {
+	DeviceID string `yaml:"device_id"`
 	Name     string `yaml:"name"`
+}
+
+func (b Binding) DisplayName() string {
+	switch {
+	case strings.EqualFold(b.DeviceID, "cycle"):
+		return "Siguiente salida (alternar)"
+	case strings.EqualFold(b.DeviceID, "toggle"):
+		if b.Name != "" {
+			return b.Name
+		}
+		return "Alternar A/B"
+	default:
+		return b.Name
+	}
 }
 
 type StartupOutput struct {
@@ -23,9 +43,14 @@ type StartupOutput struct {
 	Name     string `yaml:"name"`
 }
 
+type CheckUpdates struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 type Config struct {
 	Communications bool           `yaml:"communications"`
 	Startup        *StartupOutput `yaml:"startup_output,omitempty"`
+	CheckUpdates   *CheckUpdates  `yaml:"check_updates,omitempty"`
 	Bindings       []Binding      `yaml:"bindings"`
 }
 
@@ -65,7 +90,25 @@ func (c Config) Validate() error {
 			return fmt.Errorf("atajo repetido: %s", b.Hotkey)
 		}
 		seen[id] = true
-		if strings.TrimSpace(b.DeviceID) == "" {
+		deviceID := strings.TrimSpace(b.DeviceID)
+		switch {
+		case strings.EqualFold(deviceID, "toggle"):
+			if len(b.Toggle) != 2 {
+				return fmt.Errorf("%s: el atajo A/B necesita exactamente dos salidas", b.Hotkey)
+			}
+			first := strings.TrimSpace(b.Toggle[0].DeviceID)
+			second := strings.TrimSpace(b.Toggle[1].DeviceID)
+			if first == "" || second == "" {
+				return fmt.Errorf("%s: las salidas A/B necesitan un dispositivo", b.Hotkey)
+			}
+			if strings.EqualFold(first, "cycle") || strings.EqualFold(second, "cycle") ||
+				strings.EqualFold(first, "toggle") || strings.EqualFold(second, "toggle") {
+				return fmt.Errorf("%s: usa dispositivos concretos en el atajo A/B", b.Hotkey)
+			}
+			if strings.EqualFold(first, second) {
+				return fmt.Errorf("%s: las dos salidas A/B deben ser distintas", b.Hotkey)
+			}
+		case deviceID == "":
 			return fmt.Errorf("falta el dispositivo de %s", b.Hotkey)
 		}
 	}

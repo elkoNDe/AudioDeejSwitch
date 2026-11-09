@@ -1,12 +1,28 @@
 # Copia este archivo como switcher.yaml y ajusta los atajos y dispositivos.
 communications: false
 
+# Comprobar actualizaciones automáticamente al iniciar (opcional).
+# check_updates:
+#   enabled: true
+
 # Salida que se aplica automáticamente al abrir AudioDeejSwitch (opcional).
 # También puedes elegirla desde la ventana con el botón "Al iniciar".
 # Descomenta y ajusta el ID y el nombre de tu dispositivo:
 # startup_output:
 #   device_id: '{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}'
 #   name: Nombre de tu dispositivo
+
+# Atajo A/B: alterna entre dos salidas con una sola tecla.
+# Descomenta y sustituye los IDs por los de tus dos dispositivos:
+# bindings:
+#   - hotkey: Ctrl+Alt+A
+#     device_id: toggle
+#     toggle:
+#       - device_id: '{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}'
+#         name: Altavoces
+#       - device_id: '{1.1.1.11111111}.{11111111-1111-1111-1111-111111111111}'
+#         name: Auriculares
+#     name: Alternar Altavoces/Auriculares
 
 bindings:
   - hotkey: Ctrl+Oem5

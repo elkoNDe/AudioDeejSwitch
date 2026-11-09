@@ -1,4 +1,7 @@
-param([switch]$Clean)
+param(
+    [switch]$Clean,
+    [string]$Version = 'v1.0.3'
+)
 
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath './go.mod')) { throw 'Ejecuta este script desde la carpeta AudioDeejSwitch.' }
@@ -18,7 +21,20 @@ if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar el icono.' }
 if (Test-Path -LiteralPath './pkg/deej/cmd/rsrc_windows.syso') { Remove-Item -LiteralPath './pkg/deej/cmd/rsrc_windows.syso' -Force }
 go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -manifest ./packaging/AudioDeejSwitch.manifest.xml -ico ./assets/deej-red-black.ico -o ./pkg/deej/cmd/rsrc_windows_amd64.syso
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar los recursos de Windows.' }
-$buildArgs = @('build', '-mod=readonly', '-trimpath', '-ldflags', '-H windowsgui', '-o', './AudioDeejSwitch.exe')
+
+# Version injection
+$versionTag = $Version
+$gitCommit = (git rev-parse --short HEAD 2>$null)
+if (-not $gitCommit) { $gitCommit = "unknown" }
+$buildType = "portable"
+$ldflags = @(
+    "-X main.versionTag=$versionTag"
+    "-X main.gitCommit=$gitCommit"
+    "-X main.buildType=$buildType"
+    "-X github.com/omriharel/deej/internal/updater.Version=$versionTag"
+    "-H=windowsgui"
+)
+$buildArgs = @('build', '-mod=readonly', '-trimpath', '-ldflags', ($ldflags -join ' '), '-o', './AudioDeejSwitch.exe')
 if ($Clean) { $buildArgs += '-a' }
 $buildArgs += './pkg/deej/cmd'
 & go @buildArgs

@@ -1,6 +1,8 @@
 package deej
 
 import (
+	"context"
+
 	"github.com/getlantern/systray"
 	"github.com/omriharel/deej/internal/audioswitch"
 
@@ -25,8 +27,8 @@ func (d *Deej) initializeTray(onDone func()) {
 		}
 		systray.AddSeparator()
 
-		refreshSessions := systray.AddMenuItem("Re-scan audio sessions", "Manually refresh audio sessions if something's stuck")
-		refreshSessions.SetIcon(icon.RefreshSessionsRed)
+		checkUpdates := systray.AddMenuItem("Buscar actualizaciones", "Verificar si hay una nueva versión disponible")
+		checkUpdates.SetIcon(icon.RefreshSessionsRed)
 
 		if d.version != "" {
 			systray.AddSeparator()
@@ -53,13 +55,10 @@ func (d *Deej) initializeTray(onDone func()) {
 					audioswitch.CloseSettings()
 					d.signalStop()
 
-				// refresh sessions
-				case <-refreshSessions.ClickedCh:
-					logger.Info("Refresh sessions menu item clicked, triggering session map refresh")
-
-					// performance: the reason that forcing a refresh here is okay is that users can't spam the
-					// right-click -> select-this-option sequence at a rate that's meaningful to performance
-					d.sessions.refreshSessions(true)
+				// check updates
+				case <-checkUpdates.ClickedCh:
+					logger.Info("Check updates menu item clicked")
+					go d.CheckForUpdatesAndNotify(context.Background())
 				}
 			}
 		}()

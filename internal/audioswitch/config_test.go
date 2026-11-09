@@ -134,6 +134,57 @@ func TestStartupOutputValidation(t *testing.T) {
 	}
 }
 
+func TestToggleTarget(t *testing.T) {
+	b := Binding{DeviceID: "cycle", Name: "foo"}
+	if b.DisplayName() != "Siguiente salida (alternar)" {
+		t.Errorf("cycle display name: %q", b.DisplayName())
+	}
+	b = Binding{DeviceID: "speaker", Name: "Speakers"}
+	if b.DisplayName() != "Speakers" {
+		t.Errorf("device display name: %q", b.DisplayName())
+	}
+}
+
+func TestValidateToggleBinding(t *testing.T) {
+	valid := Config{Bindings: []Binding{{
+		Hotkey:   "Ctrl+Alt+A",
+		DeviceID: "toggle",
+		Name:     "Altavoces/Auriculares",
+		Toggle: []ToggleTarget{
+			{DeviceID: "speakers", Name: "Altavoces"},
+			{DeviceID: "headphones", Name: "Auriculares"},
+		},
+	}}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid toggle binding rejected: %v", err)
+	}
+	if got := valid.Bindings[0].DisplayName(); got != "Altavoces/Auriculares" {
+		t.Errorf("toggle display name: %q", got)
+	}
+
+	cases := []Config{
+		{Bindings: []Binding{{Hotkey: "Ctrl+Alt+A", DeviceID: "toggle"}}},
+		{Bindings: []Binding{{Hotkey: "Ctrl+Alt+A", DeviceID: "toggle", Toggle: []ToggleTarget{{DeviceID: "same"}, {DeviceID: "same"}}}}},
+		{Bindings: []Binding{{Hotkey: "Ctrl+Alt+A", DeviceID: "toggle", Toggle: []ToggleTarget{{DeviceID: "cycle"}, {DeviceID: "other"}}}}},
+	}
+	for i, c := range cases {
+		if err := c.Validate(); err == nil {
+			t.Errorf("case %d: invalid toggle binding accepted", i)
+		}
+	}
+}
+
+func TestCheckUpdates(t *testing.T) {
+	c := Config{CheckUpdates: &CheckUpdates{Enabled: true}}
+	if c.CheckUpdates == nil || !c.CheckUpdates.Enabled {
+		t.Fatal("CheckUpdates not parsed")
+	}
+	c.CheckUpdates = nil
+	if c.CheckUpdates != nil {
+		t.Fatal("nil CheckUpdates")
+	}
+}
+
 func TestLoadConfigStartupOutput(t *testing.T) {
 	previous, err := os.Getwd()
 	if err != nil {

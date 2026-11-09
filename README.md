@@ -16,6 +16,10 @@ el protocolo serie y `config.yaml`, y añade selección de salida y atajos globa
    **Capturar**, pulsa la nueva combinación, pulsa **Añadir atajo** y elimina el
    anterior con **Eliminar**. También puedes asignar un atajo a
    **Siguiente salida disponible (alternar)**.
+6. Para alternar entre dos salidas con una sola tecla, pulsa **Alternar**, elige
+   **Salida A** y **Salida B**, captura el atajo abajo y pulsa **Añadir atajo**.
+7. Usa **Iniciar con Windows** para activar o desactivar el arranque automático.
+   Solo puede haber una instancia principal en ejecución.
 
 Para abrir la configuración sin conectar con el Arduino, ejecuta **`Configurar.cmd`**
 o `AudioDeejSwitch.exe --settings`. Este modo permite preparar la configuración,
@@ -28,6 +32,12 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
 - Ventana nativa pequeña para seleccionar salida y configurar atajos globales.
 - Atajos directos a un dispositivo o para alternar entre todas las salidas activas,
   ordenadas por nombre. No necesitan que la ventana tenga el foco ni siga abierta.
+- Atajo A/B: alterna entre dos salidas concretas con una sola tecla.
+- Instancia única: si se abre una segunda copia, se cierra sola para no duplicar
+  atajos ni conexiones al Arduino.
+- Botón **Iniciar con Windows** en la configuración, sin editar `shell:startup`.
+- Comprobación de actualizaciones desde la bandeja. La comprobación automática al
+  iniciar es opcional y se activa con `check_updates.enabled` en `switcher.yaml`.
 - Cambio de salida predeterminada de consola y multimedia, sin avisos al cambiar
   correctamente. No modifica la salida de comunicaciones ni la entrada de micrófono.
 - Salida automática al abrir la aplicación: selecciona una salida y pulsa
@@ -39,6 +49,9 @@ pero los atajos necesitan la aplicación principal ejecutándose en la bandeja.
   en el ejecutable y la bandeja del sistema.
 - Editor de `config.yaml` integrado: conserva el texto y los comentarios,
   valida antes de guardar y crea `config.yaml.bak` con la versión anterior.
+- Selector de puerto COM detectado, con ayuda y botón para volver a escanear.
+- Editor visual de `slider_mapping` con índices, destinos y lista de aplicaciones
+  de audio en ejecución.
 - Detección de ediciones externas: si el archivo cambió después de abrir la
   ventana, se evita sobrescribirlo. En el editor de deej puedes recargarlo;
   para recargar los atajos, cierra y vuelve a abrir la ventana.
@@ -65,14 +78,24 @@ Esta versión cambia la salida de Windows; no asigna rutas de audio por aplicaci
 
 Mantén el ejecutable, `config.yaml` y `switcher.yaml` en una carpeta con permisos
 de escritura. Los archivos se buscan junto al ejecutable, incluido al arrancar
-desde un acceso directo. Puedes colocar un acceso directo al ejecutable en
-`shell:startup` para iniciarlo con Windows.
+desde un acceso directo. Usa **Iniciar con Windows** en la configuración para
+registrar o quitar el arranque automático.
 
 La salida elegida con **Al iniciar** se guarda en `switcher.yaml` como
-`startup_output` y se aplica cada vez que se abre la aplicación. Para que se
-seleccione al encender el equipo, mantén el acceso directo en `shell:startup`.
-No hace falta pulsar ningún atajo; el cambio es silencioso si la salida está
-disponible.
+`startup_output` y se aplica cada vez que se abre la aplicación, también al
+encender el equipo si el arranque automático está activo. No hace falta pulsar
+ningún atajo; el cambio es silencioso si la salida está disponible.
+
+### Instalador
+
+`package.ps1` compila el ejecutable, copia los archivos a `dist` y genera un
+instalador con Inno Setup 6:
+
+```powershell
+.\package.ps1 -Version 1.0.3
+```
+
+El instalador se crea en `dist\AudioDeejSwitch_Setup_1.0.3.exe`.
 
 ### Compilación y comprobaciones
 
@@ -82,6 +105,7 @@ Necesitas Go 1.22 o posterior. Desde esta carpeta, en PowerShell:
 .\build.ps1
 go test ./...
 go vet ./...
+.\package.ps1 -Version 1.0.3   # requiere Inno Setup 6
 ```
 
 El script verifica la integridad de las dependencias, genera el recurso de Windows

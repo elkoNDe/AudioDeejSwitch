@@ -3,11 +3,13 @@
 package deej
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/omriharel/deej/internal/audioswitch"
+	"github.com/omriharel/deej/internal/updater"
 
 	"go.uber.org/zap"
 
@@ -22,11 +24,12 @@ const (
 
 // Deej is the main entity managing access to all sub-components
 type Deej struct {
-	logger   *zap.SugaredLogger
-	notifier Notifier
-	config   *CanonicalConfig
-	serial   *SerialIO
-	sessions *sessionMap
+	logger       *zap.SugaredLogger
+	notifier     Notifier
+	config       *CanonicalConfig
+	serial       *SerialIO
+	sessions     *sessionMap
+	checkUpdates updater.CheckUpdateFunc
 
 	stopChannel chan bool
 	version     string
@@ -132,6 +135,31 @@ func (d *Deej) SetVersion(version string) {
 // Verbose returns a boolean indicating whether deej is running in verbose mode
 func (d *Deej) Verbose() bool {
 	return d.verbose
+}
+
+// SetUpdateChecks sets the update checking function
+func (d *Deej) SetUpdateChecks(fn updater.CheckUpdateFunc) {
+	d.checkUpdates = fn
+}
+
+// CheckForUpdatesAndNotify checks for updates and notifies the user with the
+// result. Safe to call from a goroutine after NewDeej.
+func (d *Deej) CheckForUpdatesAndNotify(ctx context.Context) {
+	if d.checkUpdates == nil {
+		d.notifier.Notify("Actualizaciones no disponibles", "Esta compilación no tiene el comprobador de versiones.")
+		return
+	}
+	hasUpdate, latest, _, err := d.checkUpdates(ctx)
+	if err != nil {
+		d.logger.Warnw("Update check failed", "error", err)
+		d.notifier.Notify("Error comprobando actualizaciones", err.Error())
+		return
+	}
+	if hasUpdate {
+		d.notifier.Notify("Actualización disponible", fmt.Sprintf("Versión %s disponible", latest))
+		return
+	}
+	d.notifier.Notify("Sin actualizaciones", "Ya tienes la última versión")
 }
 
 func (d *Deej) setupInterruptHandler() {

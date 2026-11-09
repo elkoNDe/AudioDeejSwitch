@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -56,11 +57,13 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 		register := user32.NewProc("RegisterHotKey")
 		unregister := user32.NewProc("UnregisterHotKey")
 		active := map[uintptr]Binding{}
+		toggleState := map[uintptr]int{}
 		clear := func() {
 			for id := range active {
 				unregister.Call(0, id)
 			}
 			active = map[uintptr]Binding{}
+			toggleState = map[uintptr]int{}
 		}
 		defer clear()
 		var cfg Config
@@ -97,6 +100,15 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 			if err != nil {
 				notify("No se pudo cambiar la salida", err.Error())
 			}
+		}
+		trigger := func(id uintptr, b Binding) {
+			if strings.EqualFold(b.DeviceID, "toggle") && len(b.Toggle) == 2 {
+				next := toggleState[id] % 2
+				toggleState[id] = next + 1
+				switchTo(b.Toggle[next].DeviceID)
+				return
+			}
+			switchTo(b.DeviceID)
 		}
 		reload()
 		var startup *StartupOutput
@@ -152,7 +164,7 @@ func Start(notify func(string, string)) (stop func(), next func()) {
 				var msg win.MSG
 				for win.PeekMessage(&msg, 0, win.WM_HOTKEY, win.WM_HOTKEY, win.PM_REMOVE) {
 					if b, ok := active[uintptr(msg.WParam)]; ok {
-						switchTo(b.DeviceID)
+						trigger(uintptr(msg.WParam), b)
 					}
 				}
 			}
