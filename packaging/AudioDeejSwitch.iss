@@ -34,7 +34,7 @@ ArchitecturesAllowed=x64
 
 [Files]
 Source: "{#SourceDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\config.yaml"; DestDir: "{app}"; Flags: ignoreversion createallsubdirs
+Source: "..\config.yaml"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
