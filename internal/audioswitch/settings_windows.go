@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/lxn/walk"
@@ -76,6 +77,7 @@ func RunSettings() error {
 	var connectionNote *walk.Label
 	var abButton *walk.PushButton
 	var abPanel *walk.Composite
+	var deleteShortcutButton *walk.PushButton
 	var outputA *walk.ComboBox
 	var outputB *walk.ComboBox
 	var slidersList *walk.ListBox
@@ -88,6 +90,8 @@ func RunSettings() error {
 	var abEnabled bool
 	loadedOutputIndex := 0
 	capturedHotkey := ""
+	captureBackup := ""
+	var saveShortcutButton *walk.PushButton
 	var appIcon *walk.Icon
 	if icon, err := walk.NewIconFromResourceId(2); err == nil {
 		appIcon = icon
@@ -120,6 +124,8 @@ func RunSettings() error {
 	var selected func() (Binding, bool)
 	var updateStartupButton func()
 	var refreshDevices func()
+	var buildBinding func(string) (Binding, bool)
+	var updateShortcutButton func()
 	capture.onKey = func(mods, key uint32) {
 		if err := ValidateHotkey(mods, key); err != nil {
 			hotkey.SetText(err.Error())
@@ -129,8 +135,16 @@ func RunSettings() error {
 		capturedHotkey = FormatHotkey(mods, key)
 		hotkey.SetText(capturedHotkey)
 	}
-	capture.onCancel = func() { hotkey.SetText(capturedHotkey) }
+	capture.onCancel = func() { hotkey.SetText(captureBackup) }
 	showError := func(err error) { walk.MsgBox(mw, "AudioDeejSwitch", err.Error(), walk.MsgBoxIconError) }
+	beginCapture := func() {
+		capture.begin()
+		hotkey.SetText("Pulsa la combinación…")
+		if err := hotkey.SetFocus(); err != nil {
+			capture.stop()
+			showError(err)
+		}
+	}
 	noiseLevelForIndex = func(index int) string {
 		switch index {
 		case 0:
@@ -155,13 +169,18 @@ func RunSettings() error {
 		abEnabled = enabled
 		if abButton != nil {
 			if enabled {
-				abButton.SetText("Ocultar")
+				abButton.SetText("Alternar ON")
 			} else {
-				abButton.SetText("Alternar")
+				abButton.SetText("Alternar OFF")
 			}
 		}
-		if abPanel != nil {
-			abPanel.SetVisible(enabled)
+		if outputA != nil {
+			outputA.SetEnabled(enabled)
+			outputA.Invalidate()
+		}
+		if outputB != nil {
+			outputB.SetEnabled(enabled)
+			outputB.Invalidate()
 		}
 		if updateStartupButton != nil {
 			updateStartupButton()
@@ -184,14 +203,13 @@ func RunSettings() error {
 		}
 		ports, err := AvailableCOMPorts()
 		if err != nil {
-			showError(err)
-			return
+			ports = nil
 		}
 		configured, _ := GetTopLevelScalar(string(original), "com_port")
 		if configured != "" {
 			found := false
 			for _, p := range ports {
-				if p == configured {
+				if strings.EqualFold(p, configured) {
 					found = true
 					break
 				}
@@ -201,11 +219,19 @@ func RunSettings() error {
 			}
 		}
 		portsCombo.SetModel(ports)
+		selected := -1
 		if configured != "" {
-			portsCombo.SetText(configured)
-		} else if len(ports) > 0 {
-			portsCombo.SetCurrentIndex(0)
+			for i, p := range ports {
+				if strings.EqualFold(p, configured) {
+					selected = i
+					break
+				}
+			}
 		}
+		if selected < 0 && len(ports) > 0 {
+			selected = 0
+		}
+		portsCombo.SetCurrentIndex(selected)
 	}
 	refreshConnectionFields = func() {
 		if portsCombo == nil || baudRate == nil || noiseCombo == nil {
@@ -523,6 +549,50 @@ func RunSettings() error {
 		i := shortcuts.CurrentIndex()
 		return i, i >= 0 && i < len(cfg.Bindings)
 	}
+	updateShortcutButton = func() {
+		if saveShortcutButton == nil {
+			return
+		}
+		if _, ok := selectedShortcut(); ok {
+			saveShortcutButton.SetText("Modificar atajo")
+		} else {
+			saveShortcutButton.SetText("Guardar atajo")
+		}
+	}
+	clearShortcutSelection := func() {
+		if shortcuts != nil {
+			win.SendMessage(shortcuts.Handle(), win.LB_SETCURSEL, ^uintptr(0), 0)
+			shortcuts.SetCurrentIndex(-1)
+		}
+		capturedHotkey = ""
+		captureBackup = ""
+		capture.stop()
+		if hotkey != nil {
+			hotkey.SetText("")
+		}
+		updateShortcutButton()
+	}
+	buildBinding = func(hotkeyValue string) (Binding, bool) {
+		if abEnabled {
+			first, second, ok := selectedToggle()
+			if !ok {
+				showError(fmt.Errorf("elige dos salidas distintas para A/B"))
+				return Binding{}, false
+			}
+			return Binding{
+				Hotkey:   hotkeyValue,
+				DeviceID: "toggle",
+				Name:     "Alternar " + first.Name + " / " + second.Name,
+				Toggle:   []ToggleTarget{first, second},
+			}, true
+		}
+		b, ok := selected()
+		if !ok {
+			return Binding{}, false
+		}
+		b.Hotkey = hotkeyValue
+		return b, true
+	}
 	outputIndexForDevice := func(id string) int {
 		for i, d := range devices {
 			if d.ID == id {
@@ -626,11 +696,11 @@ func RunSettings() error {
 													savedNote.SetText("Salida al iniciar guardada.")
 												}},
 												HSpacer{},
-												PushButton{AssignTo: &abButton, Text: "Alternar", OnClicked: func() { setABMode(!abEnabled) }},
+												PushButton{AssignTo: &abButton, Text: "Alternar OFF", OnClicked: func() { setABMode(!abEnabled) }},
 											}},
-											Composite{AssignTo: &abPanel, Visible: false, Layout: HBox{Spacing: 8}, Children: []Widget{
-												ComboBox{AssignTo: &outputA, StretchFactor: 1, ToolTipText: "Salida A"},
-												ComboBox{AssignTo: &outputB, StretchFactor: 1, ToolTipText: "Salida B"},
+											Composite{AssignTo: &abPanel, Layout: HBox{Spacing: 8}, Children: []Widget{
+												ComboBox{AssignTo: &outputA, Enabled: false, StretchFactor: 1, ToolTipText: "Salida A"},
+												ComboBox{AssignTo: &outputB, Enabled: false, StretchFactor: 1, ToolTipText: "Salida B"},
 											}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
 												PushButton{AssignTo: &autoStartButton, Text: "Iniciar con Windows", OnClicked: func() {
@@ -660,62 +730,62 @@ func RunSettings() error {
 												HSpacer{},
 											}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												LineEdit{AssignTo: &hotkey, ReadOnly: true, CueBanner: "Sin atajo", StretchFactor: 1},
-												PushButton{Text: "Capturar", OnClicked: func() {
-													capture.begin()
-													hotkey.SetText("Pulsa la combinación…")
-													if err := hotkey.SetFocus(); err != nil {
-														capture.stop()
-														showError(err)
+												LineEdit{AssignTo: &hotkey, ReadOnly: true, CueBanner: "Haz clic para capturar", ToolTipText: "Haz clic aquí y pulsa la combinación de teclas", StretchFactor: 1, OnMouseDown: func(x, y int, button walk.MouseButton) {
+													if button == walk.LeftButton {
+														beginCapture()
 													}
 												}},
-												PushButton{Text: "Añadir atajo", OnClicked: func() {
-													if capturedHotkey == "" {
+												PushButton{AssignTo: &saveShortcutButton, Text: "Guardar atajo", OnClicked: func() {
+													index, editing := selectedShortcut()
+													hotkeyValue := capturedHotkey
+													if hotkeyValue == "" {
+														hotkeyValue = captureBackup
+													}
+													if hotkeyValue == "" {
 														showError(fmt.Errorf("captura un atajo primero"))
 														return
 													}
-													var b Binding
-													if abEnabled {
-														first, second, ok := selectedToggle()
-														if !ok {
-															showError(fmt.Errorf("elige dos salidas distintas para A/B"))
-															return
-														}
-														b = Binding{
-															Hotkey:   capturedHotkey,
-															DeviceID: "toggle",
-															Name:     "Alternar " + first.Name + " / " + second.Name,
-															Toggle:   []ToggleTarget{first, second},
-														}
-													} else {
-														var ok bool
-														b, ok = selected()
-														if !ok {
-															return
-														}
-														b.Hotkey = capturedHotkey
+													b, ok := buildBinding(hotkeyValue)
+													if !ok {
+														return
 													}
 													previous := cfg
-													cfg.Bindings = append(append([]Binding{}, cfg.Bindings...), b)
+													if editing {
+														cfg.Bindings = append([]Binding{}, cfg.Bindings...)
+														cfg.Bindings[index] = b
+													} else {
+														cfg.Bindings = append(append([]Binding{}, cfg.Bindings...), b)
+													}
 													if !persistRules() {
 														cfg = previous
 														refreshRules()
+														updateShortcutButton()
 														return
 													}
 													refreshRules()
 													capturedHotkey = ""
 													capture.stop()
-													hotkey.SetText("")
-													if abEnabled {
-														setABMode(false)
-														savedNote.SetText("Atajo A/B guardado.")
+													if editing {
+														captureBackup = ""
+														hotkey.SetText("")
+														shortcuts.SetCurrentIndex(-1)
+														savedNote.SetText("Atajo modificado.")
+													} else {
+														captureBackup = ""
+														hotkey.SetText("")
+														if abEnabled {
+															savedNote.SetText("Atajo A/B guardado.")
+														} else {
+															savedNote.SetText("Atajo añadido.")
+														}
 													}
+													updateShortcutButton()
 												}},
 											}},
 											Label{Text: "Lista de atajos configurados:", Font: Font{Family: "Segoe UI", PointSize: 9}},
 											ListBox{AssignTo: &shortcuts, StretchFactor: 1},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												PushButton{Text: "Eliminar", OnClicked: func() {
+												PushButton{AssignTo: &deleteShortcutButton, Text: "Eliminar", OnClicked: func() {
 													i, ok := selectedShortcut()
 													if !ok {
 														return
@@ -730,9 +800,11 @@ func RunSettings() error {
 													refreshRules()
 													shortcuts.SetCurrentIndex(-1)
 													capturedHotkey = ""
+													captureBackup = ""
 													capture.stop()
 													hotkey.SetText("")
 													savedNote.SetText("Atajo eliminado.")
+													updateShortcutButton()
 												}},
 												HSpacer{},
 												Label{AssignTo: &savedNote, Text: "", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: darkMuted},
@@ -752,8 +824,8 @@ func RunSettings() error {
 											Label{Text: "Conexión con Arduino", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
 											Label{Text: "Elige el puerto detectado y ajusta la velocidad de conexión y el suavizado de los sliders.", Font: Font{Family: "Segoe UI", PointSize: 9}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												Label{Text: "Puerto detectado:"},
-												ComboBox{AssignTo: &portsCombo, Font: Font{Family: "Segoe UI", PointSize: 11}, MinSize: Size{Width: 320, Height: 32}, MaxSize: Size{Width: 420}},
+												Label{Text: "Puerto detectado:", Font: Font{Family: "Segoe UI", PointSize: 9}},
+												ComboBox{AssignTo: &portsCombo, Font: Font{Family: "Segoe UI", PointSize: 9}, MinSize: Size{Width: 320, Height: 32}, MaxSize: Size{Width: 420}},
 												PushButton{
 													Text:        "⟳",
 													ToolTipText: "Volver a detectar puertos",
@@ -764,11 +836,11 @@ func RunSettings() error {
 												HSpacer{},
 											}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
-												Label{Text: "Velocidad de conexión:", ToolTipText: "Baud rate: debe coincidir con el Arduino (normalmente 9600)."},
-												NumberEdit{AssignTo: &baudRate, Value: float64(initialBaud), MinValue: 300, MaxValue: 2000000, Decimals: 0, Increment: 100, Font: Font{Family: "Segoe UI", PointSize: 11}, MinSize: Size{Width: 180, Height: 32}, MaxSize: Size{Width: 220}},
+												Label{Text: "Velocidad de conexión:", Font: Font{Family: "Segoe UI", PointSize: 9}, ToolTipText: "Baud rate: debe coincidir con el Arduino (normalmente 9600)."},
+												NumberEdit{AssignTo: &baudRate, Value: float64(initialBaud), MinValue: 300, MaxValue: 2000000, Decimals: 0, Increment: 100, Font: Font{Family: "Segoe UI", PointSize: 9}, MinSize: Size{Width: 180, Height: 32}, MaxSize: Size{Width: 220}},
 												HSpacer{},
-												Label{Text: "Suavizado:", ToolTipText: "Bajo responde antes a cambios pequeños; Alto filtra más el temblor del potenciómetro."},
-												ComboBox{AssignTo: &noiseCombo, Model: []string{"Bajo", "Normal", "Alto"}, CurrentIndex: initialNoiseIndex, Font: Font{Family: "Segoe UI", PointSize: 11}, MinSize: Size{Width: 180, Height: 32}, MaxSize: Size{Width: 220}},
+												Label{Text: "Suavizado:", Font: Font{Family: "Segoe UI", PointSize: 9}, ToolTipText: "Bajo responde antes a cambios pequeños; Alto filtra más el temblor del potenciómetro."},
+												ComboBox{AssignTo: &noiseCombo, Model: []string{"Bajo", "Normal", "Alto"}, CurrentIndex: initialNoiseIndex, Font: Font{Family: "Segoe UI", PointSize: 9}, MinSize: Size{Width: 180, Height: 32}, MaxSize: Size{Width: 220}},
 												HSpacer{},
 											}},
 											Composite{Layout: HBox{Spacing: 8}, Children: []Widget{
@@ -843,7 +915,7 @@ func RunSettings() error {
 	hotkey.EditingFinished().Attach(func() {
 		if capture.active {
 			capture.stop()
-			hotkey.SetText(capturedHotkey)
+			hotkey.SetText(captureBackup)
 		}
 	})
 	mw.SizeChanged().Attach(func() {
@@ -852,19 +924,84 @@ func RunSettings() error {
 	})
 	shortcuts.SizeChanged().Attach(func() { updateShortcutScrollbar(shortcuts) })
 	slidersList.SizeChanged().Attach(func() { updateShortcutScrollbar(slidersList) })
+	shortcuts.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button != walk.LeftButton {
+			return
+		}
+		hwnd := shortcuts.Handle()
+		count := int(win.SendMessage(hwnd, win.LB_GETCOUNT, 0, 0))
+		result := uint32(win.SendMessage(hwnd, win.LB_ITEMFROMPOINT, 0, uintptr(win.MAKELONG(uint16(x), uint16(y)))))
+		clicked := int(win.LOWORD(result))
+		blank := win.HIWORD(result) != 0 || clicked < 0 || clicked >= count
+		if !blank {
+			var rect win.RECT
+			if int(win.SendMessage(hwnd, win.LB_GETITEMRECT, uintptr(clicked), uintptr(unsafe.Pointer(&rect)))) == win.LB_ERR ||
+				x < int(rect.Left) || x > int(rect.Right) || y < int(rect.Top) || y > int(rect.Bottom) {
+				blank = true
+			}
+		}
+		if blank || clicked == shortcuts.CurrentIndex() {
+			shortcuts.Synchronize(func() {
+				clearShortcutSelection()
+			})
+		}
+	})
+	clearIfOutside := func() {
+		if _, ok := selectedShortcut(); ok {
+			clearShortcutSelection()
+		}
+	}
+	keepShortcutClick := []win.HWND{
+		shortcuts.Handle(),
+		hotkey.Handle(),
+		saveShortcutButton.Handle(),
+		deleteShortcutButton.Handle(),
+		outputs.Handle(),
+		startupButton.Handle(),
+		abButton.Handle(),
+		outputA.Handle(),
+		outputB.Handle(),
+	}
+	settingsMouseDown = func(hwnd win.HWND) {
+		for h := hwnd; h != 0; h = win.GetParent(h) {
+			for _, keep := range keepShortcutClick {
+				if h == keep {
+					return
+				}
+			}
+		}
+		clearIfOutside()
+	}
+	defer func() { settingsMouseDown = nil }()
 	outputs.CurrentIndexChanged().Attach(updateStartupButton)
 	refreshDevices()
+	setABMode(false)
 	refreshRules()
 	refreshConnectionFields()
 	loadVisualMapping()
 	updateAutoStartButton()
+	slidersList.CurrentIndexChanged().Attach(func() {
+		i := slidersList.CurrentIndex()
+		if i < 0 || i >= len(sliderEntries) {
+			return
+		}
+		entry := sliderEntries[i]
+		sliderIndex.SetText(strconv.Itoa(entry.Index))
+		sliderTarget.SetText(strings.Join(entry.Targets, ", "))
+	})
 	shortcuts.CurrentIndexChanged().Attach(func() {
 		i, ok := selectedShortcut()
 		if !ok {
+			capturedHotkey = ""
+			captureBackup = ""
+			capture.stop()
+			hotkey.SetText("")
+			updateShortcutButton()
 			return
 		}
 		b := cfg.Bindings[i]
 		capturedHotkey = ""
+		captureBackup = b.Hotkey
 		capture.stop()
 		hotkey.SetText(b.Hotkey)
 		loadedOutputIndex = outputIndexForDevice(b.DeviceID)
@@ -881,6 +1018,7 @@ func RunSettings() error {
 			setABMode(false)
 		}
 		updateStartupButton()
+		updateShortcutButton()
 	})
 	mw.Run()
 	return nil

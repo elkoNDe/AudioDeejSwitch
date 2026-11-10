@@ -17,6 +17,10 @@ var (
 	darkAccent   = walk.RGB(238, 55, 73)
 	darkBorder   = walk.RGB(93, 93, 104)
 	fillRectProc = syscall.NewLazyDLL("user32.dll").NewProc("FillRect")
+
+	// settingsMouseDown observes clicks on every native window of the settings
+	// form, including Walk's private children (tab header, client composite).
+	settingsMouseDown func(win.HWND)
 )
 
 type darkSurface struct {
@@ -156,6 +160,10 @@ func applySettingsDarkMode(mw walk.Form) error {
 				if class == "SysTabControl32" || class == "ComboBox" {
 					return 1
 				}
+			case win.WM_LBUTTONDOWN:
+				if settingsMouseDown != nil {
+					settingsMouseDown(hwnd)
+				}
 			}
 			return win.CallWindowProc(old, hwnd, msg, wp, lp)
 		})
@@ -182,8 +190,9 @@ func applySettingsDarkMode(mw walk.Form) error {
 func paintDarkCombo(hwnd win.HWND, dc win.HDC, surfaces map[walk.Color]*darkSurface) {
 	var bounds win.RECT
 	win.GetClientRect(hwnd, &bounds)
+	disabled := !win.IsWindowEnabled(hwnd)
 	border := darkBorder
-	if win.GetFocus() == hwnd {
+	if !disabled && win.GetFocus() == hwnd {
 		border = darkAccent
 	}
 	fillDarkRect(dc, &bounds, surfaces[border].hbr)
@@ -191,19 +200,27 @@ func paintDarkCombo(hwnd win.HWND, dc win.HDC, surfaces map[walk.Color]*darkSurf
 	bounds.Top++
 	bounds.Right--
 	bounds.Bottom--
-	fillDarkRect(dc, &bounds, surfaces[darkInput].hbr)
+	face := darkInput
+	textColor := darkText
+	if disabled {
+		face = darkCard
+		textColor = darkMuted
+	}
+	fillDarkRect(dc, &bounds, surfaces[face].hbr)
 	font := win.SendMessage(hwnd, win.WM_GETFONT, 0, 0)
 	previous := win.SelectObject(dc, win.HGDIOBJ(font))
 	defer win.SelectObject(dc, previous)
 	win.SetBkMode(dc, win.TRANSPARENT)
-	win.SetTextColor(dc, win.COLORREF(darkText))
+	win.SetTextColor(dc, win.COLORREF(textColor))
 	arrowWidth := int32(24)
 	if dpi := win.GetDeviceCaps(dc, win.LOGPIXELSX); dpi > 0 {
 		arrowWidth = 24 * dpi / 96
 	}
 	arrow := bounds
 	arrow.Left = arrow.Right - arrowWidth
-	fillDarkRect(dc, &arrow, surfaces[darkCard].hbr)
+	if !disabled {
+		fillDarkRect(dc, &arrow, surfaces[darkCard].hbr)
+	}
 	text := syscall.StringToUTF16Ptr("▾")
 	win.DrawTextEx(dc, text, -1, &arrow, win.DT_CENTER|win.DT_VCENTER|win.DT_SINGLELINE, nil)
 	index := win.SendMessage(hwnd, win.CB_GETCURSEL, 0, 0)
